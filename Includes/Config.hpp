@@ -22,11 +22,10 @@ namespace ShinyHunt
         //  MODE
         // --------------------------------------------------------------------
         // The hunt never starts itself. It's off by default whenever the game
-        // boots/reboots -- start it explicitly from the menu (or the SELECT
-        // hotkey, see Hunter::Toggle) once you're actually ready to hunt,
-        // e.g. standing in front of the starter bag. This also means a crash
-        // recovery / game restart never silently resumes an unattended loop
-        // you didn't intend to leave running.
+        // boots/reboots -- start it explicitly from the L+R menu once you're
+        // actually ready to hunt, e.g. standing in front of the starter bag.
+        // This also means a crash recovery / game restart never silently
+        // resumes an unattended loop you didn't intend to leave running.
         static constexpr bool kStartHuntOnBoot = false;
 
         // --------------------------------------------------------------------
@@ -107,18 +106,15 @@ namespace ShinyHunt
         // --------------------------------------------------------------------
         //  SLEEP / HOME / SWAP  (lid-close, HOME menu, app-swap)
         // --------------------------------------------------------------------
-        // There is no "keep-awake" setting here. An earlier version tried to
-        // suppress sleep with a blind, unsolicited APT:U ReplySleepQuery IPC
-        // call every frame -- confirmed harmful on hardware (black screen on
-        // lid-open requiring a hard reboot, random crashes during boot/save-
-        // load, since it raced the framework's own transition handling).
-        //
-        // CTRPluginFramework already owns sleep/HOME/swap handling correctly,
-        // on its own thread, via Luma's plgldr event protocol, and exposes it
-        // through Process::SetProcessEventCallback(). Hunter::OnProcessEvent
-        // (registered in main.cpp) uses that to pause the FSM for the
-        // duration of the transition and resume exactly where it left off --
-        // no fighting the OS, no unsafe IPC. See docs/OPEN_QUESTIONS.md Q1.
+        // There is no "keep-awake" setting here, and there is no way to add
+        // one: sleep-on-lid-close is a hardware Hall sensor, not a software
+        // toggle. An earlier version tried to suppress it with a blind APT:U
+        // ReplySleepQuery IPC call -- confirmed harmful on hardware (black
+        // screen requiring a hard reboot). Instead, Hunter::OnProcessEvent
+        // (registered in main.cpp via Process::SetProcessEventCallback) simply
+        // STOPS the hunt the instant sleep / HOME / app-swap begins, so the
+        // FSM is inert through the transition. Restart from the menu after.
+        // Run with the lid OPEN. See docs/OPEN_QUESTIONS.md Q1.
 
         // --------------------------------------------------------------------
         //  LED (solid yellow on shiny)
@@ -135,10 +131,18 @@ namespace ShinyHunt
         static constexpr u32 kJinglePlays       = 5;
         static constexpr u32 kJingleGapFrames   = 60; // 1 second between plays
 
-        // SD path the plugin loads the jingle from at runtime. Deploy the
-        // converted audio file here (next to the .3gx). The <TITLEID> segment
-        // is filled in by the loader's install folder, so this is an absolute
-        // SD path you copy the asset to.                         <<CALIBRATE>>
+        // How many overlapping plays the clip allocates channels for. Our
+        // jingle is ~0.5 s and plays are 1 s apart, so they never overlap, but
+        // a small margin is harmless.
+        static constexpr int kJingleMaxSimultPlays = 4;
+
+        // Absolute SD path the plugin loads the jingle from at runtime.
+        // Copy assets/shiny_jingle.bcwav (built by assets/make_jingle.py and
+        // shipped in the CI artifact) to exactly this location:
+        //   sd:/luma/plugins/shiny_jingle.bcwav
+        // It is a single fixed path -- no per-title folder needed. If the file
+        // is missing the plugin simply runs without sound (the LED is the
+        // primary indicator); it never crashes over a missing jingle.
         static constexpr const char *kSoundPath =
             "/luma/plugins/shiny_jingle.bcwav";
     }

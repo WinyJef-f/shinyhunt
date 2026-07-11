@@ -37,7 +37,6 @@ namespace ShinyHunt
         u32     s_jinglePlays = 0;
         u32     s_jingleTimer = 0;
         PkmData s_lastRead     = {};
-        bool    s_paused      = false; // set by OnProcessEvent during sleep/HOME/swap
 
         void Enter(State next)
         {
@@ -100,22 +99,6 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::OnFrame(void)
     {
-        // SELECT is an always-available manual abort/start hotkey -- no need
-        // to open the L+R menu to stop the hunt before something risky
-        // happens. ORAS doesn't use SELECT for anything itself. Checked even
-        // while paused, so it still works as an escape hatch.
-        if (Controller::IsKeyPressed(Key::Select))
-            Toggle();
-
-        // While a sleep/HOME/swap transition is in progress, the game's own
-        // memory layout and input state are being torn down/rebuilt by the
-        // framework (see ProcessImpl::UpdateMemRegions() and the plgldr event
-        // loop in CTRPluginFramework's KeepThreadMain). Injecting buttons or
-        // reading party memory during that window is unsafe. Freeze the FSM
-        // exactly where it is and resume on the matching _EXIT event.
-        if (s_paused)
-            return;
-
         switch (s_state)
         {
         case State::Idle:
@@ -241,17 +224,24 @@ namespace ShinyHunt
 
     void Hunter::OnProcessEvent(Process::Event event)
     {
+        // The console entering sleep (lid close), the HOME menu, or an app
+        // swap while the hunt is active reliably crashed on hardware (heap
+        // corruption during the framework's own transition handling). The
+        // console cannot be kept out of sleep anyway -- it's a hardware lid
+        // sensor, not a software setting. So the safe thing is to fully STOP
+        // the hunt the instant any of these begins, leaving the FSM Idle and
+        // completely inert (no input injection, no memory reads) through the
+        // transition. Restart the hunt manually from the menu afterwards.
+        //
+        // This handler runs on the framework's own thread mid-transition, so
+        // it must not allocate or touch the OSD -- set the state directly,
+        // nothing else.
         switch (event)
         {
         case Process::Event::SLEEP_ENTER:
         case Process::Event::HOME_ENTER:
         case Process::Event::SWAP_ENTER:
-            s_paused = true;
-            break;
-        case Process::Event::SLEEP_EXIT:
-        case Process::Event::HOME_EXIT:
-        case Process::Event::SWAP_EXIT:
-            s_paused = false;
+            s_state = State::Idle;
             break;
         default:
             break;
@@ -269,18 +259,8 @@ namespace ShinyHunt
         return s_state != State::Idle;
     }
 
-    void Hunter::Toggle(void)
-    {
-        if (IsRunning())
-            Stop();
-        else
-            Start();
-    }
-
     std::string Hunter::StatusLine(void)
     {
-        if (s_paused && s_state != State::Idle)
-            return "Paused (sleep/HOME/swap in progress)";
 
         switch (s_state)
         {
@@ -323,13 +303,18 @@ namespace ShinyHunt
 
     void Hunter::Diag::TestSound(void)
     {
-        Sound::Init();
+        bool loaded = Sound::Init();
         bool played = Sound::PlayJingle();
         std::string body;
-        body += std::string("sound compiled in + loaded: ") + (Sound::Available() ? "YES" : "NO") + "\n";
+        body += std::string("jingle loaded: ") + (loaded ? "YES" : "NO") + "\n";
         body += std::string("play started: ") + (played ? "YES" : "NO") + "\n";
-        if (!Sound::Available())
-            body += "Enable SHINYHUNT_ENABLE_SOUND and set the clip path/format (docs/AUDIO.md).";
+        body += "path: " + std::string(Cfg::kSoundPath) + "\n";
+        if (!loaded)
+            body += "File missing? Copy assets/shiny_jingle.bcwav to that\n"
+                    "exact SD path. (docs/AUDIO.md). Sound is optional --\n"
+                    "the LED is the primary shiny indicator.";
+        else
+            body += "You should have heard the jingle.";
         MessageBox("Shiny Hunter - sound test", body)();
     }
 }

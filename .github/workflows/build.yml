@@ -75,5 +75,6 @@ jobs:
           path: |
             shinyhunt.3gx
             shinyhunt.elf
+            assets/shiny_jingle.bcwav
           if-no-files-found: error
           retention-days: 14

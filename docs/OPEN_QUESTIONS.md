@@ -50,7 +50,7 @@ replacement by hand instead of just calling the libctru function.
 sleep-query notification, not fired speculatively. Doing so unsolicited, on
 the game's own thread, desynced APT's state machine.
 
-### Attempt 2 (shipped): pause/resume via `Process::SetProcessEventCallback`
+### Attempt 2: pause/resume via `Process::SetProcessEventCallback` (superseded)
 
 Reading CTRPluginFramework's own source (`Library/source/pluginInit.cpp` in
 the [upstream repo](https://gitlab.com/thepixellizeross/ctrpluginframework))
@@ -66,61 +66,51 @@ enum class Event { EXIT, SLEEP_ENTER, SLEEP_EXIT, HOME_ENTER, HOME_EXIT, SWAP_EN
 static void SetProcessEventCallback(ProcessEventCallback callback);
 ```
 
-`Hunter::OnProcessEvent` (`Sources/ShinyHunter.cpp`, registered in
-`main.cpp`) uses this to set a `s_paused` flag on `*_ENTER` and clear it on
-`*_EXIT`. `Hunter::OnFrame` checks it first and returns immediately when
-paused — no input injection, no party-memory reads — freezing the FSM
-exactly where it was and resuming once the transition completes.
+Attempt 2 used this to **pause** the FSM on `*_ENTER` and resume on `*_EXIT`.
 
-**Attempt 2 hardware result: partial fix.** Boot/save-load transitions no
-longer crashed in the next test session (tentative — the user's own words:
-"unless I was able to go from the intro to the title to the save load to the
-game all in a fluke"; needs more repetitions to call it solid). But
-switching from Alpha Sapphire to `ftpd` via the HOME menu **still crashed**,
-producing a 4th exception dump. Decoding it (same method as below) showed
-**the exact same fault**: a data abort on write at `PC = _free_r+0x88` — the
-identical faulting instruction as the first three dumps, byte-for-byte the
-same offset into the same function. Only `LR` differs: `__libc_cond_broadcast
-+0x8` this time, vs. `__libc_lock_acquire_recursive+0x18` before — a
-different caller reaching the same corrupted state.
+**Attempt 2 hardware result: not enough.** Boot/save-load transitions stopped
+crashing, but switching from Alpha Sapphire to `ftpd` via the HOME menu
+**still crashed**, producing a 4th exception dump — **the exact same fault**:
+a data abort on write at `PC = _free_r+0x88`, byte-for-byte the same offset
+into the same function as the first three dumps (only `LR` differed:
+`__libc_cond_broadcast+0x8` vs. `__libc_lock_acquire_recursive+0x18`, a
+different caller reaching the same corrupted heap state).
 
-This is important: it means pausing `OnFrame` **did not** stop this specific
-crash, even though our FSM is provably inert (no input injection, no memory
-reads) throughout the swap by the time it happens. That rules out our own
-per-frame code as the direct trigger for the HOME/swap case and points at
-something in **CTRPluginFramework's own swap-handling sequence** (running on
-its internal `KeepThread`, unmapping/remapping a "hook memory" page located
-immediately adjacent to the newlib heap's upper boundary —
-`__ctru_heap + __ctru_heap_size`, see `allocateHeaps.cpp` — while some other
-thread, e.g. the framework's own OSD/menu rendering, may still be touching
-the heap). That's a plausible mechanism, not a confirmed one; pinning it down
-further would need a live debugger session on hardware, not just post-mortem
-register dumps.
+### Attempt 3 (shipped): stop the hunt on any transition
 
-**What did improve:** the failure mode itself. Attempt 1's unsafe IPC hack
-produced an *unrecoverable* black screen requiring a hard reboot. This crash
-now surfaces as a normal, *recoverable* Luma3DS exception screen (dumps get
-written, the game/plugin can be closed normally) — worse than no crash, but
-much better than attempt 1.
+Since even a *paused* FSM didn't prevent the HOME/swap crash, attempt 3 stops
+being clever about resuming and just **fully stops the hunt** the instant any
+`SLEEP_ENTER` / `HOME_ENTER` / `SWAP_ENTER` fires. `Hunter::OnProcessEvent`
+sets the state straight to `Idle` (no allocation, no OSD, nothing that could
+itself race the framework's mid-transition heap work), leaving the FSM
+completely inert. You restart the hunt from the menu when you're back. This
+is the simplest possible contract — "any interruption stops the hunt" — and
+removes every bit of our own activity from the dangerous window.
 
-**Practical mitigation shipped alongside this:** a **SELECT hotkey**
-(`Hunter::Toggle`, checked every frame regardless of pause state) instantly
-stops or starts the hunt without navigating the L+R menu, so you're not
-racing a menu to avoid a crash before doing anything risky (switching apps,
-etc.). It doesn't fix the underlying HOME/swap crash — the evidence above
-suggests it may not even help, since the crash reproduced with the FSM
-already paused/inert — but it's a fast, always-available escape hatch and a
-good habit regardless.
+**Honest status:** whether this fully eliminates the HOME/swap crash is
+**not yet confirmed on hardware.** The 4th dump showed the fault can occur
+with our per-frame code already inert, which points at
+CTRPluginFramework's own swap-handling sequence (its `KeepThread`
+unmapping/remapping a "hook memory" page adjacent to the newlib heap's upper
+boundary — `__ctru_heap + __ctru_heap_size`, see `allocateHeaps.cpp`) rather
+than at us. If that's the true cause, stopping the hunt reduces but may not
+100% remove the risk. The strong correlation the user observed ("only crashes
+when hunting is on") still suggests our activity is a contributing trigger,
+so going fully inert is the best mitigation available from the plugin side.
+The failure mode is at least **recoverable** now (a normal Luma exception
+screen that writes a dump, not attempt 1's hard-reboot black screen).
 
-**Current recommendation:** avoid returning to the HOME menu / switching
-apps while the plugin is loaded and a hunt might be active, until this is
-root-caused further. If you do need to swap apps, expect a small chance of a
-recoverable crash (Luma exception screen, not a hang) rather than
-data loss or hardware risk.
+**Current recommendation:** run with the lid open and avoid the HOME menu
+while a hunt is active. Entering sleep or HOME now stops the hunt
+automatically, so the main risk is the instant of the transition itself.
 
 **Hardware verification still needed:**
-1. Repeat the boot/save-load cycle several more times to confirm attempt 2
-   actually fixed that case and it wasn't a fluke.
+1. With a hunt running, close the lid (or open HOME / swap to `ftpd`) and
+   confirm the hunt is stopped on return and — the open question — whether
+   the crash is now gone or merely less frequent. New dumps welcome if it
+   still happens.
+2. Repeat the boot/save-load cycle several more times to confirm that case
+   stays crash-free.
 2. If anyone wants to dig further into the HOME/swap crash: a live GDB
    session via Luma's debugger, or trying a newer `libctrpf` build (the
    [upstream repo](https://gitlab.com/thepixellizeross/ctrpluginframework)

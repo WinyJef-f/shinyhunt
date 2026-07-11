@@ -22,17 +22,13 @@ namespace ShinyHunt
         void OnFrame(void);
 
         // Registered via Process::SetProcessEventCallback (see main.cpp).
-        // Pauses the FSM for SLEEP/HOME/SWAP _ENTER (no input injection or
-        // memory reads while the game's own state/memory layout is mid-
-        // transition) and resumes it on the matching _EXIT, exactly where it
-        // left off. This is the framework-supported replacement for the
-        // removed SleepControl hack -- see docs/OPEN_QUESTIONS.md Q1.
+        // Stops the hunt the instant the console enters sleep, the HOME menu,
+        // or an app swap -- doing anything during those transitions reliably
+        // crashed on hardware. See docs/OPEN_QUESTIONS.md Q1.
         void OnProcessEvent(CTRPluginFramework::Process::Event event);
 
         void Start(void);      // begin / restart the autonomous hunt
         void Stop(void);       // halt the loop (go Idle)
-        void Toggle(void);     // Start() if idle, Stop() otherwise -- shared by
-                                // the menu entry and the SELECT hotkey
         bool IsRunning(void);
 
         // Human-readable status for the menu ("Idle", "Attempt 137: waiting", ...).

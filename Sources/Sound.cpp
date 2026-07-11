@@ -1,60 +1,55 @@
 // ============================================================================
 //  Sound.cpp
 //
-//  Set SHINYHUNT_ENABLE_SOUND to 1 once you have confirmed your installed
-//  libctrpf exposes a Sound API and you have converted the jingle to the
-//  format it expects (docs/AUDIO.md). Then fix the two marked lines below to
-//  match that header's exact signatures. Everything else in the plugin works
-//  regardless of this flag.
+//  Real implementation over CTRPluginFramework::Sound (Sound/Sound.hpp,
+//  pulled in by <CTRPluginFramework.hpp>). Constructs the clip from a BCWAV
+//  file on the SD card and plays it. This is the SAME load path the framework
+//  uses for its own menu sounds (File -> operator new -> cwavLoad), which is
+//  the one proven to work from inside a 3GX plugin -- the buffer ends up on
+//  the plugin's heap where CSND's VA->PA conversion works. (An embedded
+//  in-.data buffer is NOT reliable for CSND DMA, so we load from a file.)
+//
+//  NOTE: our own namespace has a `Sound` namespace, which would collide with
+//  CTRPluginFramework::Sound, so every reference to the framework class is
+//  fully qualified as ::CTRPluginFramework::Sound.
 // ============================================================================
-#ifndef SHINYHUNT_ENABLE_SOUND
-#define SHINYHUNT_ENABLE_SOUND 0
-#endif
-
 #include "Sound.hpp"
 #include "Config.hpp"
 
 #include <CTRPluginFramework.hpp>
 
-#if SHINYHUNT_ENABLE_SOUND
-// Included at file scope (NOT inside a namespace) on purpose.
-// <<CALIBRATE: this path/name must match your libctrpf.>>
-#include <CTRPluginFramework/System/Sound.hpp>
-#endif
-
 namespace ShinyHunt
 {
     namespace
     {
-        bool s_loaded = false;
+        using CwavSound  = ::CTRPluginFramework::Sound;
+        using CwavStatus = ::CTRPluginFramework::Sound::CWAVStatus;
 
-#if SHINYHUNT_ENABLE_SOUND
-        // Fully qualified to avoid clashing with our own ShinyHunt::Sound.
-        ::CTRPluginFramework::Sound *s_clip = nullptr;
-#endif
+        CwavSound *s_clip   = nullptr;
+        bool       s_loaded = false;
 
         bool DoInit(void)
         {
-#if SHINYHUNT_ENABLE_SOUND
-            ::CTRPluginFramework::Sound::Initialize();                 // <<CALIBRATE 1>>
-            s_clip   = ::CTRPluginFramework::Sound::Load(Cfg::kSoundPath); // <<CALIBRATE 2>>
-            s_loaded = (s_clip != nullptr);
-#else
-            s_loaded = false;
-#endif
+            if (s_loaded)
+                return true;
+
+            // Construct the clip once. Even on failure we keep the object so
+            // we don't re-read the file (and re-allocate) every frame; a
+            // failed load just leaves s_loaded false.
+            if (s_clip == nullptr)
+                s_clip = new CwavSound(std::string(Cfg::kSoundPath),
+                                       Cfg::kJingleMaxSimultPlays);
+
+            s_loaded = (s_clip != nullptr &&
+                        s_clip->GetLoadStatus() == CwavStatus::SUCCESS);
             return s_loaded;
         }
 
         bool DoPlay(void)
         {
-#if SHINYHUNT_ENABLE_SOUND
             if (!s_loaded || s_clip == nullptr)
                 return false;
-            s_clip->Play();
-            return true;
-#else
-            return false;
-#endif
+            return s_clip->Play() == CwavStatus::SUCCESS;
         }
     }
 
