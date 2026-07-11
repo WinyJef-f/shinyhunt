@@ -100,6 +100,13 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::OnFrame(void)
     {
+        // SELECT is an always-available manual abort/start hotkey -- no need
+        // to open the L+R menu to stop the hunt before something risky
+        // happens. ORAS doesn't use SELECT for anything itself. Checked even
+        // while paused, so it still works as an escape hatch.
+        if (Controller::IsKeyPressed(Key::Select))
+            Toggle();
+
         // While a sleep/HOME/swap transition is in progress, the game's own
         // memory layout and input state are being torn down/rebuilt by the
         // framework (see ProcessImpl::UpdateMemRegions() and the plgldr event
@@ -262,6 +269,14 @@ namespace ShinyHunt
         return s_state != State::Idle;
     }
 
+    void Hunter::Toggle(void)
+    {
+        if (IsRunning())
+            Stop();
+        else
+            Start();
+    }
+
     std::string Hunter::StatusLine(void)
     {
         if (s_paused && s_state != State::Idle)
@@ -284,15 +299,12 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::Diag::ReadPokemon(void)
     {
-        PkmData party, box;
+        PkmData party;
         PokemonReader::Read(Cfg::kPartySlot1Addr, party);
-        PokemonReader::Read(Cfg::kBoxSlot1Addr, box);
 
         std::string body;
         body += "=== PARTY slot 1 (" + Hex32(Cfg::kPartySlot1Addr) + ") ===\n";
-        body += Describe(party) + "\n\n";
-        body += "=== BOX 1 slot 1 (" + Hex32(Cfg::kBoxSlot1Addr) + ") ===\n";
-        body += Describe(box);
+        body += Describe(party);
 
         MessageBox("Shiny Hunter - memory check", body)();
     }

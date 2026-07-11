@@ -3,9 +3,11 @@
 A self-contained Luma3DS **3GX plugin** that runs inside Pokémon Alpha Sapphire
 (ORAS) on a modded New 3DS. While active it soft-resets the game, picks the
 Mudkip starter, reads party slot 1 straight from process memory, checks
-shininess, and repeats **fully unattended** — indefinitely, with the lid closed.
-On a shiny hit it locks the notification **LED solid yellow** and plays a shiny
-jingle, then holds that state so you can find the console by the LED alone.
+shininess, and repeats **fully unattended, with the lid open** (see
+`docs/OPEN_QUESTIONS.md` Q1 for why lid-closed operation isn't currently
+possible). On a shiny hit it locks the notification **LED solid yellow** and
+plays a shiny jingle, then holds that state so you can find the console by
+the LED alone.
 
 No PC, no InputRedirection, no network at runtime. A Mac is used only to build
 and deploy.
@@ -14,11 +16,13 @@ and deploy.
 
 ## Status — read this first
 
-This plugin has now been run on hardware (New 3DS, ORAS). Party read/decrypt
-and the LED are confirmed working. **Sleep/HOME/swap handling was rebuilt on
-the framework's own event API** after the original approach caused
-black-screen hangs and random crashes — see the table below and
-`docs/OPEN_QUESTIONS.md` Q1.
+This plugin has now been run on hardware (New 3DS, ORAS) across two test
+sessions. Party read/decrypt and the LED are confirmed working. **There is
+no way to keep the console awake with the lid closed** (it's a hardware Hall
+sensor, not a software setting — see `docs/OPEN_QUESTIONS.md` Q1), and
+**switching to the HOME menu / another app while a hunt is active can still
+crash**, even after a rewrite that fixed the boot/save-load crashes. Run
+with the lid open; see Q1 for the full story and current recommendation.
 
 | Area | Confidence | Notes |
 |------|-----------|-------|
@@ -26,7 +30,8 @@ black-screen hangs and random crashes — see the table below and
 | ORAS party slot-1 address `0x8CFB26C` | **Confirmed on hardware** (Q3) | matched species + trainer TID/SID |
 | Input injection model (`InjectKey`, per-frame) | **High** — from CTRPF `Controller.cpp` | timing needs tuning |
 | LED via `ptm:sysm` | **Confirmed on hardware** (Q2) | reachable, `SetInfoLedPattern` returned success, LED visually solid yellow |
-| Sleep / HOME / swap handling | **Rebuilt on `Process::SetProcessEventCallback`** (Q1) | the original raw-IPC keep-awake hack caused black-screen hangs + crashes; the FSM now pauses on `*_ENTER` and resumes on `*_EXIT` instead — see `docs/OPEN_QUESTIONS.md` |
+| Lid-closed sleep | **Not possible** (Q1) | hardware Hall sensor, no software override exists; run with the lid open |
+| HOME menu / app-swap while hunting | **Known crash, partially understood, unresolved** (Q1) | heap corruption inside newlib `_free_r`, same exact instruction across 4 hardware crash dumps; a SELECT hotkey now lets you stop the hunt instantly before swapping apps, but does not fix the underlying crash |
 | Starter input *timing/sequence* | **Needs calibration** | `InputSim.cpp` script |
 | Shiny jingle playback | **Off by default** | enable after confirming the Sound API — see `docs/AUDIO.md` |
 
@@ -50,11 +55,11 @@ The **LED is the primary, always-on indicator**; sound is a bonus.
 5. **Calibrate** the party offset check + starter input timing →
    `docs/HARDWARE_CALIBRATION.md`
 6. **(Optional) enable sound** → `docs/AUDIO.md`
-7. Save **standing right in front of the starter bag**, start the hunt, close
-   the menu. For a run that continues progressing with the lid closed,
-   disable **Sleep Mode** in the 3DS System Settings (Other Settings) first —
-   see `docs/OPEN_QUESTIONS.md` Q1 for why the plugin itself deliberately
-   does not try to override sleep.
+7. Save **standing right in front of the starter bag**. The hunt is stopped
+   by default on every boot — start it from the menu, or press **SELECT**
+   to toggle it instantly at any time. Keep the lid **open**; see
+   `docs/OPEN_QUESTIONS.md` Q1 for why lid-closed operation isn't possible,
+   and avoid the HOME menu while a hunt is running until that's resolved.
 
 ---
 
@@ -78,10 +83,12 @@ Inputs are **software-injected** (not physical buttons), so the loop runs
 unattended without anyone touching the console. `main.cpp` also registers
 `Hunter::OnProcessEvent` via `Process::SetProcessEventCallback`: on
 `SLEEP_ENTER` / `HOME_ENTER` / `SWAP_ENTER` the FSM freezes (no input
-injection, no memory reads) rather than racing the framework's own
-transition handling, and resumes exactly where it left off on the matching
-`_EXIT` event. See `docs/OPEN_QUESTIONS.md` Q1 for why this replaced an
-earlier attempt to override sleep directly.
+injection, no memory reads) and resumes on the matching `_EXIT` event. This
+fixed boot/save-load crashes from an earlier, unsafe attempt to override
+sleep directly, but a separate, still-unresolved crash can happen when
+switching to the HOME menu / another app while hunting — see
+`docs/OPEN_QUESTIONS.md` Q1. Press **SELECT** at any time to instantly
+start/stop the hunt (`Hunter::Toggle`) without opening the menu.
 
 ## Layout
 

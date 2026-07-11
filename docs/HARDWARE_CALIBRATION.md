@@ -11,12 +11,11 @@ you toggle it from the menu.
 
 ## A. Confirm / fix the party offset
 
-Covered by **Q3** in `docs/OPEN_QUESTIONS.md`. If **Diag: read party + box now**
-shows a valid, correct slot-1 Pokémon, you are done — skip to section B.
+Covered by **Q3** in `docs/OPEN_QUESTIONS.md` — already confirmed correct on
+hardware. If **Diag: read party now** shows a valid, correct slot-1 Pokémon
+for you too, you are done — skip to section B.
 
-If it is wrong:
-- The box cross-check (`0x8C9E134`) reading correctly while the party reads
-  garbage means only `Cfg::kPartySlot1Addr` is off for your revision.
+If it is wrong on your cartridge/revision:
 - The value shipped (`0x8CFB26C`) is the PKMN-NTR "sango" party offset. If your
   cart differs, the delta is usually small and constant. Options to find it:
   - Use Rosalina's memory viewer / a memory-editing tool (NTR, or the CTRPF

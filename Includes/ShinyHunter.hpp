@@ -31,6 +31,8 @@ namespace ShinyHunt
 
         void Start(void);      // begin / restart the autonomous hunt
         void Stop(void);       // halt the loop (go Idle)
+        void Toggle(void);     // Start() if idle, Stop() otherwise -- shared by
+                                // the menu entry and the SELECT hotkey
         bool IsRunning(void);
 
         // Human-readable status for the menu ("Idle", "Attempt 137: waiting", ...).
@@ -39,9 +41,9 @@ namespace ShinyHunt
         // ---- Diagnostics (bound to on-screen menu entries) ------------------
         namespace Diag
         {
-            // Read party slot 1 AND box slot 1 right now, decrypt, and show
-            // PID/TID/SID/species/shiny + checksum validity. Use this to answer
-            // open-question #3 (do the offsets hold for this cartridge?).
+            // Read party slot 1 right now, decrypt, and show PID/TID/SID/
+            // species/shiny + checksum validity. Use this to answer open-
+            // question #3 (do the offsets hold for this cartridge?).
             void ReadPokemon(void);
 
             // Force the solid yellow LED and report the ptm:sysm Result +

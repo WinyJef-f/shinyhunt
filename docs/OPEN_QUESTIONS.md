@@ -12,10 +12,19 @@ you are testing so the loop does not start on its own.
 
 ## Q1 — Does the console stay awake with the lid closed?
 
-**RESOLVED — the plugin no longer tries to suppress sleep at all. It uses
-`Process::SetProcessEventCallback` to pause/resume around the transition
-instead.** This required two iterations; both are recorded below because the
-second one only makes sense in light of what the first one got wrong.
+**Still open.** Short answer: **no** — there is no way, from this plugin or
+from System Settings, to keep the console out of sleep mode with the lid
+closed. Sleep-on-lid-close on the 3DS is triggered by a **physical Hall-
+effect sensor** (a magnet near the hinge, detected by the right speaker
+area), not a software setting — an earlier version of this doc incorrectly
+suggested a "Sleep Mode" toggle in System Settings; **no such setting
+exists.** The only software lever at all is APT-level sleep-query
+suppression, which is exactly what attempt 1 below tried and found unsafe.
+Practically: **run with the lid open** for now.
+
+Two iterations are recorded below because the second one only makes sense in
+light of what the first one got wrong, and because the second one is only a
+**partial** fix — see "Attempt 2 hardware result."
 
 ### Attempt 1 (removed): blind `APT:U ReplySleepQuery` — actively harmful
 
@@ -61,53 +70,86 @@ static void SetProcessEventCallback(ProcessEventCallback callback);
 `main.cpp`) uses this to set a `s_paused` flag on `*_ENTER` and clear it on
 `*_EXIT`. `Hunter::OnFrame` checks it first and returns immediately when
 paused — no input injection, no party-memory reads — freezing the FSM
-exactly where it was and resuming on the same frame-counter logic once the
-transition completes. This also directly explains a crash the user
-reproduced by switching from Alpha Sapphire to `ftpd` via the HOME menu: the
-FSM was still injecting buttons and reading process memory *during* the
-swap, while the game's own memory layout was being torn down and rebuilt
-(`ProcessImpl::UpdateMemRegions()` inside the same `plgldr` event loop).
+exactly where it was and resuming once the transition completes.
 
-**Consequence — there is no more attempt to keep the console awake.**
-The console sleeps normally on lid-close; the hunt pauses and resumes
-automatically around it. For a run that must keep progressing with the lid
-closed, disable **Sleep Mode** in the 3DS System Settings (Other Settings) —
-a standard, OS-level, fully supported setting — rather than having the
-plugin fight sleep from inside an injected process, which is what caused
-attempt 1's hard-reboot failures. `Process::SetProcessEventCallback` will
-still correctly pause/resume around any HOME-menu entry or app-swap either
-way.
+**Attempt 2 hardware result: partial fix.** Boot/save-load transitions no
+longer crashed in the next test session (tentative — the user's own words:
+"unless I was able to go from the intro to the title to the save load to the
+game all in a fluke"; needs more repetitions to call it solid). But
+switching from Alpha Sapphire to `ftpd` via the HOME menu **still crashed**,
+producing a 4th exception dump. Decoding it (same method as below) showed
+**the exact same fault**: a data abort on write at `PC = _free_r+0x88` — the
+identical faulting instruction as the first three dumps, byte-for-byte the
+same offset into the same function. Only `LR` differs: `__libc_cond_broadcast
++0x8` this time, vs. `__libc_lock_acquire_recursive+0x18` before — a
+different caller reaching the same corrupted state.
+
+This is important: it means pausing `OnFrame` **did not** stop this specific
+crash, even though our FSM is provably inert (no input injection, no memory
+reads) throughout the swap by the time it happens. That rules out our own
+per-frame code as the direct trigger for the HOME/swap case and points at
+something in **CTRPluginFramework's own swap-handling sequence** (running on
+its internal `KeepThread`, unmapping/remapping a "hook memory" page located
+immediately adjacent to the newlib heap's upper boundary —
+`__ctru_heap + __ctru_heap_size`, see `allocateHeaps.cpp` — while some other
+thread, e.g. the framework's own OSD/menu rendering, may still be touching
+the heap). That's a plausible mechanism, not a confirmed one; pinning it down
+further would need a live debugger session on hardware, not just post-mortem
+register dumps.
+
+**What did improve:** the failure mode itself. Attempt 1's unsafe IPC hack
+produced an *unrecoverable* black screen requiring a hard reboot. This crash
+now surfaces as a normal, *recoverable* Luma3DS exception screen (dumps get
+written, the game/plugin can be closed normally) — worse than no crash, but
+much better than attempt 1.
+
+**Practical mitigation shipped alongside this:** a **SELECT hotkey**
+(`Hunter::Toggle`, checked every frame regardless of pause state) instantly
+stops or starts the hunt without navigating the L+R menu, so you're not
+racing a menu to avoid a crash before doing anything risky (switching apps,
+etc.). It doesn't fix the underlying HOME/swap crash — the evidence above
+suggests it may not even help, since the crash reproduced with the FSM
+already paused/inert — but it's a fast, always-available escape hatch and a
+good habit regardless.
+
+**Current recommendation:** avoid returning to the HOME menu / switching
+apps while the plugin is loaded and a hunt might be active, until this is
+root-caused further. If you do need to swap apps, expect a small chance of a
+recoverable crash (Luma exception screen, not a hang) rather than
+data loss or hardware risk.
 
 **Hardware verification still needed:**
-1. Start the hunt, open the HOME menu (or switch to another app, e.g.
-   `ftpd`), wait a few seconds, then return to Alpha Sapphire.
-2. Check the on-screen status line shows `Paused (sleep/HOME/swap in
-   progress)` while away, and resumes normal `Attempt N: ...` status on
-   return, with **no crash**.
-3. With Sleep Mode left on (default) and the hunt running, close the lid,
-   wait, then reopen it — same expectation: pause, then clean resume.
+1. Repeat the boot/save-load cycle several more times to confirm attempt 2
+   actually fixed that case and it wasn't a fluke.
+2. If anyone wants to dig further into the HOME/swap crash: a live GDB
+   session via Luma's debugger, or trying a newer `libctrpf` build (the
+   [upstream repo](https://gitlab.com/thepixellizeross/ctrpluginframework)
+   has commits after the `0.8.0.r1444` revision currently pulled by CI,
+   including hook/GSP-interrupt bugfixes — none confirmed to match this
+   specific issue, but worth trying), would be the next steps.
 
 ### Crash investigation notes (for anyone debugging further)
 
-Three Luma3DS exception dumps from hardware (before attempt 2 above) were
-decoded with the [official parser](https://github.com/LumaTeam/luma3ds_exception_dump_parser)
+Four Luma3DS exception dumps from hardware (three before attempt 2, one
+after) were decoded with the [official parser](https://github.com/LumaTeam/luma3ds_exception_dump_parser)
 and cross-referenced against `shinyhunt.elf`'s symbol table
-(`arm-none-eabi-addr2line`/`nm`, unstripped build). All three: **data abort
-on write**, `PC` inside newlib's `_free_r` (+0x88), `LR` inside
-`__libc_lock_acquire_recursive` (+0x18) — i.e. heap corruption, detected
-while `free()` was walking/relinking the free list. Both `PC` and `LR`
-resolved to addresses inside the plugin's own mapped range (`0x07000100+`
-per `3gx.ld`), confirming the corruption is within the plugin's own
-statically-linked code/heap, not the game. The faulting instruction
-(`STR r5, [r1, #0xc]`) was writing through a register that had been loaded
-from a stale/garbage value resembling raw `.text` bytes rather than a valid
-heap pointer — consistent with a corrupted free-list node, though the
-original corrupting write was not identified (that would need a live
-debugger session or bisection, not just post-mortem register dumps).
-Pausing all memory/input access during transitions (attempt 2) removes the
-highest-risk window for this, but if crashes persist **outside** a
-sleep/HOME/swap transition after this fix, that would point to a second,
-separate cause and is worth new dumps + a fresh look.
+(`arm-none-eabi-addr2line`/`nm`, unstripped build). All four: **data abort
+on write**, `PC` inside newlib's `_free_r` at the identical `+0x88` offset
+every time — i.e. heap corruption, detected while `free()` was
+walking/relinking the free list at one specific unlink instruction
+(`STR r5, [r1, #0xc]`, writing through a register loaded from a
+stale/garbage value that resembles raw `.text` bytes rather than a valid
+heap pointer). `PC` and `LR` always resolved to addresses inside the
+plugin's own mapped range (`0x07000100+` per `3gx.ld`), confirming the
+corruption is within the plugin's own statically-linked code/heap, not the
+game. `LR` — the caller that invoked the fatal `free()` — differs between
+occurrences (`__libc_lock_acquire_recursive+0x18`,
+`__libc_cond_broadcast+0x8`), meaning multiple call paths reach the same
+corrupted heap state. The consistency of the exact crash offset across
+otherwise-different triggers suggests a single specific corrupting write
+happening earlier and being discovered later, rather than a new corruption
+each time — but identifying that original write needs live debugging, not
+static analysis of post-mortem dumps.
 
 ---
 
@@ -138,48 +180,28 @@ with `srvGetServiceHandle("ptm:sysm")` and returns the `Result`.
 
 ## Q3 — Do the party offsets hold for THIS cartridge/region?
 
-The party slot-1 address `0x8CFB26C` and the PK6 decryption are cross-checked
-against multiple sources, but verify before trusting it overnight.
+**RESOLVED on hardware.** Run **Diag: read party now** with a known
+Pokémon in your party (ideally one you know is NOT shiny) and compare the
+reported species / TID / SID against what you see in-game (your TID/SID are
+on the Trainer Card). On this cartridge it read species 258 (Mudkip),
+TID/SID matching the trainer card, `valid: YES`, `SHINY: no` — the offset is
+correct.
 
-**Test (with a known Pokémon in your party — ideally one you know is NOT shiny):**
-1. Load a save that has Pokémon in the party.
-2. Run **Diag: read party + box now**.
-3. Compare the reported **party slot 1** species / TID / SID against what you see
-   in-game (your TID/SID are on the Trainer Card).
-
-- **Pass:** species matches your slot-1 Pokémon, TID/SID match your trainer card,
-  `valid(decrypt+checksum): YES`, and `SHINY: no` for a Pokémon that is not shiny
-  by eye. The offsets are correct.
-- **Fail:** `valid: no` or nonsense species/IDs. The static address differs for
-  your revision. Fix `Cfg::kPartySlot1Addr` in `Includes/Config.hpp`:
-  - The dialog also reads **box 1 slot 1** at `0x8C9E134` as a cross-check. If the
-    box reads correctly but the party does not, only the party address is off.
-  - See `docs/HARDWARE_CALIBRATION.md` for how to relocate it.
+If it ever reads `valid: no` or nonsense species/IDs on a different
+cartridge/revision, the static address differs for that revision; fix
+`Cfg::kPartySlot1Addr` in `Includes/Config.hpp` and see
+`docs/HARDWARE_CALIBRATION.md` for how to relocate it.
 
 > Do this with a **known non-shiny** Pokémon so a `SHINY: no` result proves the
 > math is right, not just that it read *something*.
 
-**RESOLVED on hardware:** party slot 1 read species 258 (Mudkip), matching
-TID/SID against the trainer card, `valid: YES`, `SHINY: no`. The offset is
-correct for this cartridge.
-
-**Bug found and fixed:** the box 1 slot 1 cross-check showed `valid: no` (as
-expected — box was empty) but also `SHINY: *** YES ***`, which is wrong. An
-empty slot decrypts to species 0 / PID 0, and `shinyValue = 0 ^ 0 ^ 0 ^ 0 =
-0`, which is `< 16` — so the shiny flag was computed even though the slot
-holds no real Pokémon. This never affected the actual hunt loop (`WaitParty`
-in `ShinyHunter.cpp` already gates on `p.valid && p.species ==
-kTargetSpecies` before evaluating shininess), but it was misleading in the
-diagnostic. Fixed in `PokemonReader.cpp` by gating `out.shiny` on
-`out.valid`.
-
-**Note on the box slot after that fix:** `SHINY: no` is now correct, but the
-diagnostic may still print a non-zero `species`/`PID` for an empty box slot.
-That's expected, not a bug: an "empty" box slot on real hardware isn't
-necessarily zeroed memory — it can hold stale bytes from whatever was last
-stored/withdrawn there, with emptiness tracked by a separate flag elsewhere
-that this diagnostic doesn't read. `valid: no` (checksum fails) is the
-correct signal that the slot isn't a real, currently-held Pokémon; the raw
-species/PID printed alongside it are not meaningful in that case. This is
-only a cross-check display — the box address is never used by the actual
-hunt loop, only `kPartySlot1Addr` is.
+**Bug found and fixed along the way:** the diagnostic used to also read box
+1 slot 1 as a cross-check, and displayed `SHINY: *** YES ***` for that
+(empty) slot despite `valid: no`. An empty slot decrypts to species 0 / PID
+0, and `shinyValue = 0 ^ 0 ^ 0 ^ 0 = 0`, which is `< 16` — so the shiny flag
+was computed even though the slot held no real Pokémon. This never affected
+the actual hunt loop (`WaitParty` in `ShinyHunter.cpp` already gates on
+`p.valid && p.species == kTargetSpecies` before evaluating shininess), but
+it was confusing in the diagnostic — and with Q3 fully resolved, the box
+cross-check no longer served a purpose. It's been removed entirely;
+`Diag::ReadPokemon()` now only reads and displays party slot 1.

@@ -26,21 +26,20 @@ namespace CTRPluginFramework
 
     static void InitMenu(PluginMenu &menu)
     {
-        // Start / stop the autonomous hunt.
+        // Start / stop the autonomous hunt. Also bound to the SELECT hotkey
+        // (see Hunter::OnFrame) so it can be stopped instantly without
+        // navigating this menu.
         menu += new MenuEntry("Start / Stop hunt", nullptr, [](MenuEntry *)
         {
-            if (ShinyHunt::Hunter::IsRunning())
-                ShinyHunt::Hunter::Stop();
-            else
-                ShinyHunt::Hunter::Start();
-        }, "Toggle the automatic soft-reset shiny hunt.");
+            ShinyHunt::Hunter::Toggle();
+        }, "Toggle the automatic soft-reset shiny hunt. Also: SELECT.");
 
         // ---- Diagnostics (resolve the open questions on hardware) -----------
-        menu += new MenuEntry("Diag: read party + box now", nullptr, [](MenuEntry *)
+        menu += new MenuEntry("Diag: read party now", nullptr, [](MenuEntry *)
         {
             ShinyHunt::Hunter::Diag::ReadPokemon();
-        }, "Decrypt party slot 1 & box 1 slot 1; show PID/TID/SID/shiny.\n"
-           "Use to verify the offsets on this cartridge (open question #3).");
+        }, "Decrypt party slot 1; show PID/TID/SID/shiny.\n"
+           "Use to verify the offset on this cartridge (open question #3).");
 
         menu += new MenuEntry("Diag: test LED (solid yellow)", nullptr, [](MenuEntry *)
         {
@@ -58,7 +57,8 @@ namespace CTRPluginFramework
     {
         PluginMenu *menu = new PluginMenu("Shiny Starter Hunter", 0, 1, 0,
             "Autonomous shiny Mudkip hunt for Alpha Sapphire.\n"
-            "L+R: open this menu. Start the hunt, close the menu, close the lid.");
+            "L+R: open this menu. SELECT: instantly start/stop the hunt.\n"
+            "Hunt is stopped by default on every boot -- start it explicitly.");
 
         // Run our FSM once per frame in the background, even while the menu is
         // closed and the game is playing normally.
