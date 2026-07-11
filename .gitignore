@@ -1,0 +1,13 @@
+# Build output
+Build/
+*.3gx
+*.elf
+*.o
+*.d
+
+# Converted audio (source stays in assets/)
+shiny_jingle.bcwav
+shiny_jingle.wav
+
+# macOS
+.DS_Store

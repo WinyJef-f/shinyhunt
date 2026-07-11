@@ -1,0 +1,35 @@
+Author: shinyhunt
+
+Version: # Plugin version
+    Major: 0
+    Minor: 1
+    Revision: 0
+
+Targets: # Low TitleId of games which are compatible with this plugin (0 / empty = all)
+    # The 3GX loader already only loads plugins from sd:/luma/plugins/<TITLEID>/,
+    # so this filter is secondary. For extra safety you MAY pin it to your
+    # cartridge's low Title ID (read it from FBI -> Titles on the console).
+    # Known low Title IDs for Alpha Sapphire:
+    #   - 0x0011C500 (EUR)   0x0011C400 (USA)   0x0011C600 (JPN)
+    # Leaving this empty targets all titles; the folder name still scopes loading.
+
+Title: Autonomous Shiny Starter Hunter
+
+Summary: Auto soft-resets ORAS for a shiny Mudkip, alerts via LED + jingle.
+
+Description: |
+  Unattended shiny-starter bot for Pokemon Omega Ruby / Alpha Sapphire.
+
+  Soft-resets the game, advances to the starter bag, picks Mudkip, reads
+  party slot 1 straight from memory, computes shininess and repeats until a
+  shiny is generated. On a hit it sets a solid yellow notification LED and
+  plays a shiny jingle, then holds that state so the console can be found by
+  the LED alone with the lid closed.
+
+  See docs/ for hardware calibration and the open-question test plan.
+
+Compatibility: Any
+
+MemorySize: 5MiB
+
+UsePrivateMemory: false
