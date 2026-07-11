@@ -89,9 +89,11 @@ namespace ShinyHunt
                 EnterShinyHold();
                 return;
             }
-            // Not shiny: notify occasionally and reset.
-            if ((s_attempts % 10) == 0)
-                OSD::Notify("Attempt " + std::to_string(s_attempts) + ": not shiny");
+            // Not shiny: reset. No OSD::Notify here on purpose -- it allocates
+            // a std::string on the shared framework heap from inside the
+            // per-frame loop, which is exactly the kind of activity implicated
+            // in the heap-corruption crashes (see docs/OPEN_QUESTIONS.md Q1).
+            // The live attempt count is still visible via the menu status line.
             Enter(State::SoftReset);
         }
     }
@@ -177,14 +179,13 @@ namespace ShinyHunt
                 // Timed out: either a script desync or the wrong starter got
                 // picked. Treat as a failed attempt and reset -- this can never
                 // "accept" a wrong-species Pokemon, so a desync only wastes a
-                // cycle, it does not corrupt the hunt.
+                // cycle, it does not corrupt the hunt. (No OSD::Notify here --
+                // no heap allocation from the per-frame loop; see Evaluate.)
                 if (Cfg::kMaxAttempts != 0 && s_attempts >= Cfg::kMaxAttempts)
                 {
-                    OSD::Notify("Reached max attempts; stopping");
                     Enter(State::Idle);
                     break;
                 }
-                OSD::Notify("Party wait timed out; resetting");
                 Enter(State::SoftReset);
             }
             break;
@@ -307,14 +308,19 @@ namespace ShinyHunt
         bool played = Sound::PlayJingle();
         std::string body;
         body += std::string("jingle loaded: ") + (loaded ? "YES" : "NO") + "\n";
-        body += std::string("play started: ") + (played ? "YES" : "NO") + "\n";
-        body += "path: " + std::string(Cfg::kSoundPath) + "\n";
+        body += std::string("play started: ") + (played ? "YES" : "NO") + "\n\n";
+        body += "checked (either works):\n";
+        body += " 1) " + std::string(Cfg::kSoundPath) + "\n";
+        body += " 2) shiny_jingle.bcwav (next to the .3gx)\n\n";
         if (!loaded)
-            body += "File missing? Copy assets/shiny_jingle.bcwav to that\n"
-                    "exact SD path. (docs/AUDIO.md). Sound is optional --\n"
-                    "the LED is the primary shiny indicator.";
+            body += "Not found. Copy shiny_jingle.bcwav (from the build) to\n"
+                    "sd:/luma/plugins/shiny_jingle.bcwav (docs/AUDIO.md).\n"
+                    "Sound is optional -- the LED is the primary indicator.";
+        else if (!played)
+            body += "Loaded but play did not start (channel busy?). Try again.";
         else
-            body += "You should have heard the jingle.";
+            body += "You should have heard the jingle. If it was silent,\n"
+                    "set Rosalina's forced volume to max and save.";
         MessageBox("Shiny Hunter - sound test", body)();
     }
 }

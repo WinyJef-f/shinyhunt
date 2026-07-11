@@ -120,26 +120,47 @@ automatically, so the main risk is the instant of the transition itself.
 
 ### Crash investigation notes (for anyone debugging further)
 
-Four Luma3DS exception dumps from hardware (three before attempt 2, one
-after) were decoded with the [official parser](https://github.com/LumaTeam/luma3ds_exception_dump_parser)
+**Five** Luma3DS exception dumps from hardware were decoded with the
+[official parser](https://github.com/LumaTeam/luma3ds_exception_dump_parser)
 and cross-referenced against `shinyhunt.elf`'s symbol table
-(`arm-none-eabi-addr2line`/`nm`, unstripped build). All four: **data abort
-on write**, `PC` inside newlib's `_free_r` at the identical `+0x88` offset
-every time — i.e. heap corruption, detected while `free()` was
-walking/relinking the free list at one specific unlink instruction
-(`STR r5, [r1, #0xc]`, writing through a register loaded from a
-stale/garbage value that resembles raw `.text` bytes rather than a valid
-heap pointer). `PC` and `LR` always resolved to addresses inside the
-plugin's own mapped range (`0x07000100+` per `3gx.ld`), confirming the
-corruption is within the plugin's own statically-linked code/heap, not the
-game. `LR` — the caller that invoked the fatal `free()` — differs between
-occurrences (`__libc_lock_acquire_recursive+0x18`,
-`__libc_cond_broadcast+0x8`), meaning multiple call paths reach the same
-corrupted heap state. The consistency of the exact crash offset across
-otherwise-different triggers suggests a single specific corrupting write
-happening earlier and being discovered later, rather than a new corruption
-each time — but identifying that original write needs live debugging, not
-static analysis of post-mortem dumps.
+(`arm-none-eabi-addr2line`/`nm`, unstripped build). **Every single one** is
+the same fault: a **data abort on write**, `PC` inside newlib's `_free_r` at
+the identical offset, at one specific free-list unlink instruction
+(`STR r5, [r1, #0xc]`, writing through a "next chunk" pointer that has been
+overwritten with garbage that decodes as ARM instruction bytes, e.g.
+`0xe92d4010` = `push {r4, lr}`). This is a textbook **heap-metadata
+corruption** signature: something earlier wrote past the end of a heap
+allocation and clobbered an adjacent chunk header; `free()` only trips over
+it later. `PC`/`LR` always land in the plugin's own mapped range
+(`0x07000100+` per `3gx.ld`) — this is the *shared* newlib/heap that both our
+code and the whole CTRPluginFramework runtime are statically linked against,
+so any `free()` anywhere in the injected code hits it.
+
+The triggers vary — sleep entry, HOME-menu app-swap (dumps 0–3), and now
+**entering the first rival battle on Route 103 while the hunt was running**
+(dump 6) — but the corrupted state and crash site are identical. That points
+to a single class of corrupting write that happens during the **game's
+scene/memory transitions** (battle intro, sleep, HOME), when the framework
+is doing the most concurrent memory work (region remaps, OSD, hook
+bookkeeping) on its own threads alongside the plugin. It is **not** the
+"read party memory / inject buttons" logic itself — those touch stack
+buffers and HID shared memory, not the heap.
+
+**Mitigation applied from the plugin side:** the per-frame hunt loop is now
+**allocation-free** — the periodic `OSD::Notify(...)` calls (which built
+`std::string`s on that shared heap every so often mid-hunt) were removed, so
+the FSM contributes zero heap churn while running. Whether that meaningfully
+reduces the crashes is unverified; if the corrupting write lives in the
+framework/hook machinery rather than in our allocations, it may not fully
+help. But it removes the one heap-touching thing we were doing during the
+loop, which is the only lever available without a live on-hardware debugger.
+
+**Note on real-hunt exposure:** an actual automated soft-reset hunt never
+walks to Route 103 or enters a battle — it cycles title → save-load → bag →
+party read → reset. The battle/HOME/manual-play crashes happen when the
+console is driven *by hand* with the hunt active. The transitions a real
+hunt does hit are the title-screen load and save load each cycle; those need
+their own repeated-run confirmation (see the boot/save-load item above).
 
 ---
 
