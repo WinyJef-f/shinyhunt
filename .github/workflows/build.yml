@@ -1,0 +1,66 @@
+name: Build plugin
+
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:20260610
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add ThePixellizerOSS pacman repo and install libctrpf
+        run: |
+          CONF=/opt/devkitpro/pacman/etc/pacman.conf
+          if ! grep -Fxq "[thepixellizeross-lib]" "$CONF"; then
+            printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$CONF"
+          fi
+          if ! grep -Fxq "[thepixellizeross-linux]" "$CONF"; then
+            printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$CONF"
+          fi
+          dkp-pacman -Sy
+          dkp-pacman -S --noconfirm libctrpf
+
+      # 3gxtool isn't a pacman package; it's built from source once and cached,
+      # since the CMake + yaml-cpp build is the slow part of this workflow.
+      - name: Cache 3gxtool
+        id: cache-3gxtool
+        uses: actions/cache@v4
+        with:
+          path: /opt/devkitpro/tools/bin/3gxtool
+          key: 3gxtool-linux-v1
+
+      - name: Build 3gxtool
+        if: steps.cache-3gxtool.outputs.cache-hit != 'true'
+        run: |
+          apt-get update && apt-get install -y cmake
+          git clone --recursive https://gitlab.com/thepixellizeross/3gxtool.git /tmp/3gxtool
+          cd /tmp/3gxtool
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          BIN=$(find build -type f -name '3gxtool*' -perm -u+x | head -n1)
+          mkdir -p /opt/devkitpro/tools/bin
+          cp "$BIN" /opt/devkitpro/tools/bin/3gxtool
+          chmod +x /opt/devkitpro/tools/bin/3gxtool
+
+      - name: Verify 3gxtool
+        run: /opt/devkitpro/tools/bin/3gxtool --help
+
+      - name: Build plugin
+        env:
+          DEVKITARM: /opt/devkitpro/devkitARM
+        run: make
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinyhunt-3gx
+          path: |
+            shinyhunt.3gx
+            shinyhunt.elf
+          if-no-files-found: error
+          retention-days: 14
