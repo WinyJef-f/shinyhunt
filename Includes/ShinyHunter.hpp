@@ -9,6 +9,8 @@
 #pragma once
 
 #include <string>
+#include "types.h" // must precede Process.hpp: it uses the NORETURN macro
+                    // without defining it itself (same gap as Color.hpp)
 #include <CTRPluginFramework/System/Process.hpp>
 
 namespace ShinyHunt
