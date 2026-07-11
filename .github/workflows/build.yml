@@ -23,20 +23,37 @@ jobs:
           if ! grep -Fxq "[thepixellizeross-linux]" "$CONF"; then
             printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$CONF"
           fi
+          # Allow the direct-install fallback below to accept the downloaded
+          # (possibly unsigned) local package.
+          if ! grep -q '^LocalFileSigLevel' "$CONF"; then
+            sed -i '/^\[options\]/a LocalFileSigLevel = Optional' "$CONF"
+          fi
 
-          # pkg.devkitpro.org intermittently returns transient 403s under load;
-          # retry with backoff instead of failing the whole build on a hiccup.
-          for attempt in 1 2 3 4 5; do
-            if dkp-pacman -Sy && dkp-pacman -S --noconfirm libctrpf; then
-              break
-            fi
-            if [ "$attempt" -eq 5 ]; then
-              echo "::error::dkp-pacman failed after 5 attempts"
-              exit 1
-            fi
-            echo "dkp-pacman attempt $attempt failed, retrying in $((attempt * 10))s..."
-            sleep $((attempt * 10))
+          # Fast path: refresh DBs and install from the repo. pkg.devkitpro.org
+          # intermittently 403s its dkp-libs / dkp-linux databases, so retry a
+          # few times before falling back.
+          ok=0
+          for attempt in 1 2 3; do
+            if dkp-pacman -Sy && dkp-pacman -S --noconfirm libctrpf; then ok=1; break; fi
+            echo "dkp-pacman sync attempt $attempt failed; retrying in $((attempt * 15))s..."
+            sleep $((attempt * 15))
           done
+
+          # Fallback: libctrpf lives on thepixellizeross (a static GitLab Pages
+          # site, independent of the flaky pkg.devkitpro.org), and its only
+          # dependencies (libctru, devkitARM) are already baked into the
+          # container image -- successful runs only ever downloaded the single
+          # libctrpf package. So install it directly, with NO devkitPro DB sync.
+          if [ "$ok" -ne 1 ]; then
+            echo "devkitPro DBs unreachable; installing libctrpf directly from thepixellizeross..."
+            base="https://thepixellizeross.gitlab.io/packages/any"
+            curl -fsSL "$base/thepixellizeross-lib.db" -o /tmp/tpo.db
+            mkdir -p /tmp/tpo_db && tar xzf /tmp/tpo.db -C /tmp/tpo_db
+            fn=$(grep -A1 '%FILENAME%' /tmp/tpo_db/libctrpf-*/desc | tail -1)
+            echo "Downloading $fn"
+            curl -fsSL "$base/$fn" -o "/tmp/$fn"
+            dkp-pacman -U --noconfirm "/tmp/$fn"
+          fi
 
       # 3gxtool isn't a pacman package; it's built from source once and cached,
       # since the CMake + yaml-cpp build is the slow part of this workflow.
