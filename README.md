@@ -41,7 +41,7 @@ The **LED is the primary, always-on indicator**; sound is a bonus.
 
 ## Do this, in order
 
-1. **Build on the Mac** → `docs/BUILD_MAC.md`
+1. **Build** → `docs/BUILD_MAC.md` (macOS) or `docs/BUILD_WINDOWS.md` (Windows)
 2. **Read your cartridge's Title ID** (FBI → Titles) and install to
    `sd:/luma/plugins/<TITLEID>/` → `docs/BUILD_MAC.md`
 3. **One-time pre-flight:** Rosalina → set **forced volume to max** and save.
@@ -87,8 +87,17 @@ Includes|Sources/SleepControl.*          aptSetSleepAllowed keep-awake
 Includes|Sources/ShinyHunter.*           the FSM + on-screen diagnostics
 Sources/main.cpp                         plugin entry, menu, callback registration
 assets/emerald_0066.wav                  your shiny jingle (needs conversion, see AUDIO.md)
-docs/                                     build, open-questions, calibration, audio
+docs/BUILD_MAC.md | BUILD_WINDOWS.md      native toolchain setup + build + deploy
+docs/OPEN_QUESTIONS.md                    the three hardware tests to run first
+docs/HARDWARE_CALIBRATION.md              offset verify + input-timing tuning
+docs/EMULATOR.md                          what a 3DS emulator can/can't do for this
+docs/AUDIO.md                             jingle format + conversion
 ```
+
+> **Can I develop this entirely in a 3DS emulator?** No — emulators don't run
+> Luma3DS's plugin loader, so the `.3gx` can't load there. An emulator is still
+> useful on the Mac for working out the input choreography and validating the
+> decryption against real game data; see `docs/EMULATOR.md`.
 
 ## Credits / references
 
