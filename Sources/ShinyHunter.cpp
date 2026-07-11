@@ -7,7 +7,6 @@
 #include "InputSim.hpp"
 #include "Led.hpp"
 #include "Sound.hpp"
-#include "SleepControl.hpp"
 
 #include <CTRPluginFramework.hpp>
 #include <3ds.h>
@@ -38,6 +37,7 @@ namespace ShinyHunt
         u32     s_jinglePlays = 0;
         u32     s_jingleTimer = 0;
         PkmData s_lastRead     = {};
+        bool    s_paused      = false; // set by OnProcessEvent during sleep/HOME/swap
 
         void Enter(State next)
         {
@@ -100,11 +100,14 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::OnFrame(void)
     {
-        // See Cfg::kSleepControlEnabled -- confirmed harmful on hardware
-        // (black screen on lid-open requiring a hard reboot, random crashes
-        // during boot/save-load). Off by default.
-        if (Cfg::kSleepControlEnabled)
-            SleepControl::Reassert();
+        // While a sleep/HOME/swap transition is in progress, the game's own
+        // memory layout and input state are being torn down/rebuilt by the
+        // framework (see ProcessImpl::UpdateMemRegions() and the plgldr event
+        // loop in CTRPluginFramework's KeepThreadMain). Injecting buttons or
+        // reading party memory during that window is unsafe. Freeze the FSM
+        // exactly where it is and resume on the matching _EXIT event.
+        if (s_paused)
+            return;
 
         switch (s_state)
         {
@@ -225,10 +228,27 @@ namespace ShinyHunt
     {
         s_attempts = 0;
         Sound::Init(); // load the clip once (no-op if sound disabled)
-        if (Cfg::kSleepControlEnabled)
-            SleepControl::KeepAwake();
         Enter(State::SoftReset);
         OSD::Notify("Shiny hunt started");
+    }
+
+    void Hunter::OnProcessEvent(Process::Event event)
+    {
+        switch (event)
+        {
+        case Process::Event::SLEEP_ENTER:
+        case Process::Event::HOME_ENTER:
+        case Process::Event::SWAP_ENTER:
+            s_paused = true;
+            break;
+        case Process::Event::SLEEP_EXIT:
+        case Process::Event::HOME_EXIT:
+        case Process::Event::SWAP_EXIT:
+            s_paused = false;
+            break;
+        default:
+            break;
+        }
     }
 
     void Hunter::Stop(void)
@@ -244,6 +264,9 @@ namespace ShinyHunt
 
     std::string Hunter::StatusLine(void)
     {
+        if (s_paused && s_state != State::Idle)
+            return "Paused (sleep/HOME/swap in progress)";
+
         switch (s_state)
         {
         case State::Idle:          return "Idle";

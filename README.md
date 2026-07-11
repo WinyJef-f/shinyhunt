@@ -15,8 +15,9 @@ and deploy.
 ## Status — read this first
 
 This plugin has now been run on hardware (New 3DS, ORAS). Party read/decrypt
-and the LED are confirmed working. **Lid-close keep-awake is confirmed
-harmful and is disabled by default** — see the table below and
+and the LED are confirmed working. **Sleep/HOME/swap handling was rebuilt on
+the framework's own event API** after the original approach caused
+black-screen hangs and random crashes — see the table below and
 `docs/OPEN_QUESTIONS.md` Q1.
 
 | Area | Confidence | Notes |
@@ -25,7 +26,7 @@ harmful and is disabled by default** — see the table below and
 | ORAS party slot-1 address `0x8CFB26C` | **Confirmed on hardware** (Q3) | matched species + trainer TID/SID |
 | Input injection model (`InjectKey`, per-frame) | **High** — from CTRPF `Controller.cpp` | timing needs tuning |
 | LED via `ptm:sysm` | **Confirmed on hardware** (Q2) | reachable, `SetInfoLedPattern` returned success, LED visually solid yellow |
-| Keep-awake with lid closed | **Confirmed harmful — disabled by default** (Q1) | caused black-screen hangs (hard reboot required) + random crashes; console now sleeps normally on lid-close, hunt pauses until lid-open — see `docs/OPEN_QUESTIONS.md` |
+| Sleep / HOME / swap handling | **Rebuilt on `Process::SetProcessEventCallback`** (Q1) | the original raw-IPC keep-awake hack caused black-screen hangs + crashes; the FSM now pauses on `*_ENTER` and resumes on `*_EXIT` instead — see `docs/OPEN_QUESTIONS.md` |
 | Starter input *timing/sequence* | **Needs calibration** | `InputSim.cpp` script |
 | Shiny jingle playback | **Off by default** | enable after confirming the Sound API — see `docs/AUDIO.md` |
 
@@ -50,9 +51,10 @@ The **LED is the primary, always-on indicator**; sound is a bonus.
    `docs/HARDWARE_CALIBRATION.md`
 6. **(Optional) enable sound** → `docs/AUDIO.md`
 7. Save **standing right in front of the starter bag**, start the hunt, close
-   the menu. Leave the lid **open** (or propped) for a true unattended run
-   until Q1 (lid-close keep-awake) has a working fix — closing the lid
-   currently just pauses the hunt safely until you reopen it.
+   the menu. For a run that continues progressing with the lid closed,
+   disable **Sleep Mode** in the 3DS System Settings (Other Settings) first —
+   see `docs/OPEN_QUESTIONS.md` Q1 for why the plugin itself deliberately
+   does not try to override sleep.
 
 ---
 
@@ -73,10 +75,13 @@ ShinyHold  -> LED solid yellow (re-asserted), jingle x5, hold forever
 ```
 
 Inputs are **software-injected** (not physical buttons), so the loop runs
-unattended without anyone touching the console. Lid-close keep-awake is
-currently **disabled by default** (see Status table above) — the console
-sleeps normally when the lid closes, and the loop resumes automatically on
-lid-open rather than running through a closed lid.
+unattended without anyone touching the console. `main.cpp` also registers
+`Hunter::OnProcessEvent` via `Process::SetProcessEventCallback`: on
+`SLEEP_ENTER` / `HOME_ENTER` / `SWAP_ENTER` the FSM freezes (no input
+injection, no memory reads) rather than racing the framework's own
+transition handling, and resumes exactly where it left off on the matching
+`_EXIT` event. See `docs/OPEN_QUESTIONS.md` Q1 for why this replaced an
+earlier attempt to override sleep directly.
 
 ## Layout
 
@@ -87,8 +92,7 @@ Includes|Sources/PokemonReader.*         party read + Gen6 decrypt + shiny
 Includes|Sources/InputSim.*              InjectKey wrapper + starter input script
 Includes|Sources/Led.*                   ptm:sysm SetInfoLedPattern (solid yellow)
 Includes|Sources/Sound.*                 CTRPF Sound wrapper (guarded, off by default)
-Includes|Sources/SleepControl.*          raw APT:U keep-awake (disabled by default, see docs/OPEN_QUESTIONS.md)
-Includes|Sources/ShinyHunter.*           the FSM + on-screen diagnostics
+Includes|Sources/ShinyHunter.*           the FSM + on-screen diagnostics + Process::Event pause/resume
 Sources/main.cpp                         plugin entry, menu, callback registration
 assets/emerald_0066.wav                  your shiny jingle (needs conversion, see AUDIO.md)
 docs/BUILD_MAC.md | BUILD_WINDOWS.md      native toolchain setup + build + deploy

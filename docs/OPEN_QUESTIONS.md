@@ -12,63 +12,102 @@ you are testing so the loop does not start on its own.
 
 ## Q1 — Does the console stay awake with the lid closed?
 
-**RESOLVED (negatively) on hardware — `SleepControl` is now disabled by
-default (`Cfg::kSleepControlEnabled = false`). Do not re-enable it as-is.**
+**RESOLVED — the plugin no longer tries to suppress sleep at all. It uses
+`Process::SetProcessEventCallback` to pause/resume around the transition
+instead.** This required two iterations; both are recorded below because the
+second one only makes sense in light of what the first one got wrong.
 
-Retail titles sleep on lid-close. Luma only auto-suppresses that while
-InputRedirection / the debugger is active, and we use neither.
+### Attempt 1 (removed): blind `APT:U ReplySleepQuery` — actively harmful
 
-**Finding from CI (not hardware, but relevant):** libctru's high-level
-`aptSetSleepAllowed()` cannot even be *linked* from a 3GX plugin — it calls
-`envGetAptAppId()`, which reads a symbol (`__apt_appid`) that's only populated
-by devkitARM's normal homebrew startup path (`crt0` → system init →
-`aptInit()`). A plugin injected into an already-running game never takes that
-path; its statically-linked libctru is a "shadow" copy that was never
-bootstrapped. Confirmed by a real link error:
-`undefined reference to '__apt_appid'`.
+The first attempt reimplemented `APT:U`'s `ReplySleepQuery` via raw IPC
+(`srvGetServiceHandle("APT:U")`, own command buffer — the same low-level
+pattern `Led.cpp` uses for `ptm:sysm`), called **unconditionally, every
+~2 seconds, from the per-frame callback, on the same thread the host game
+uses for its own APT session** — even while `Idle`.
 
-`SleepControl.cpp` reimplemented the same underlying `APT:U` service calls
-directly — same pattern as `Led.cpp` (own `srvGetServiceHandle`, own IPC
-command buffer): it queries the **live, currently-active app ID** via
-`GetAppletManInfo`, then calls `ReplySleepQuery` with `APTREPLY_REJECT`,
-periodically (every ~2s, unconditionally, from the per-frame callback — even
-while `Idle`).
+Libctru's high-level `aptSetSleepAllowed()` couldn't even be linked in the
+first place (`undefined reference to '__apt_appid'` — it depends on a global
+only populated by the normal homebrew `crt0` → `aptInit()` path, which an
+injected 3GX plugin never takes), which is what motivated writing a
+replacement by hand instead of just calling the libctru function.
 
-**Hardware result: this is actively harmful, not just ineffective.**
-On real hardware this produced two reproducible failures:
-1. The console did not sleep on lid-close (the reject "worked"), but on
-   **lid-open the screen stayed black**, with no recovery except a **hard
-   reboot**.
-2. **Random crashes during boot / save-load** — i.e. exactly the moments the
-   game itself is mid-sequence on its own legitimate `APT:U` IPC calls.
+**Hardware result: this was actively harmful, not just ineffective.**
+1. The console didn't sleep on lid-close, but on lid-open **the screen stayed
+   black**, recoverable only by a **hard reboot**.
+2. **Random crashes during boot / save-load** — exactly the moments the game
+   itself is mid-sequence on its own legitimate `APT:U` calls.
 
-Root cause: `ReplySleepQuery` is meant to be sent *in response to* an actual
-pending sleep-query notification the app receives through the normal
-`APT:U` protocol sequence (`GetLock` → `ReceiveParameter` → ... → reply).
-Firing it **unsolicited**, on the same thread the host game uses for its own
-APT session, desyncs that state machine — either by corrupting the wake
-handshake (black screen after lid-open) or by colliding with the game's own
-in-flight APT transaction during a boot/scene transition (random crash). A
-hard-reboot failure mode is unacceptable for an unattended run, so this is
-now **off by default**. Leaving it off means the console sleeps normally on
-lid-close (safe) and the hunt simply **pauses until the lid is reopened** —
-not full "hands-off with the lid closed," but no more hangs/crashes.
+`ReplySleepQuery` is meant to be sent *in response to* an actual pending
+sleep-query notification, not fired speculatively. Doing so unsolicited, on
+the game's own thread, desynced APT's state machine.
 
-**A real fix (not yet implemented)** would need to be notification-driven
-instead of blind: register for the actual `APTSIGNAL_SLEEP` event (the
-equivalent of libctru's internal `aptHook`/`ReceiveParameter` handling, done
-manually via raw IPC the same way `GetActiveAppId` is), and only call
-`ReplySleepQuery` in direct response to that specific pending query — never
-speculatively. This is a nontrivial rewrite; do not flip
-`Cfg::kSleepControlEnabled` back on without it.
+### Attempt 2 (shipped): pause/resume via `Process::SetProcessEventCallback`
 
-**If you want to experiment further anyway:** set `Cfg::kSleepControlEnabled
-= true`, rebuild, and expect the two failures above. Useful only for
-debugging a proper notification-driven replacement.
+Reading CTRPluginFramework's own source (`Library/source/pluginInit.cpp` in
+the [upstream repo](https://gitlab.com/thepixellizeross/ctrpluginframework))
+showed the framework already owns sleep/HOME/swap handling correctly, on its
+**own dedicated thread** (`KeepThreadMain`), through Luma's plugin-loader
+(`plgldr`) event protocol (`PLG_SLEEP_ENTRY/EXIT`, `PLG_HOME_ENTER/EXIT`,
+`PLG_ABOUT_TO_SWAP`) — not raw `APT:U` calls at all. It exposes this to
+plugin code through a public, documented API:
 
-> The **backlight turns off** with the lid closed even when asleep — that is
-> normal. With `kSleepControlEnabled = false`, the game (and our FSM) simply
-> pause during sleep and resume correctly on lid-open.
+```cpp
+// Library/include/CTRPluginFramework/System/Process.hpp
+enum class Event { EXIT, SLEEP_ENTER, SLEEP_EXIT, HOME_ENTER, HOME_EXIT, SWAP_ENTER, SWAP_EXIT };
+static void SetProcessEventCallback(ProcessEventCallback callback);
+```
+
+`Hunter::OnProcessEvent` (`Sources/ShinyHunter.cpp`, registered in
+`main.cpp`) uses this to set a `s_paused` flag on `*_ENTER` and clear it on
+`*_EXIT`. `Hunter::OnFrame` checks it first and returns immediately when
+paused — no input injection, no party-memory reads — freezing the FSM
+exactly where it was and resuming on the same frame-counter logic once the
+transition completes. This also directly explains a crash the user
+reproduced by switching from Alpha Sapphire to `ftpd` via the HOME menu: the
+FSM was still injecting buttons and reading process memory *during* the
+swap, while the game's own memory layout was being torn down and rebuilt
+(`ProcessImpl::UpdateMemRegions()` inside the same `plgldr` event loop).
+
+**Consequence — there is no more attempt to keep the console awake.**
+The console sleeps normally on lid-close; the hunt pauses and resumes
+automatically around it. For a run that must keep progressing with the lid
+closed, disable **Sleep Mode** in the 3DS System Settings (Other Settings) —
+a standard, OS-level, fully supported setting — rather than having the
+plugin fight sleep from inside an injected process, which is what caused
+attempt 1's hard-reboot failures. `Process::SetProcessEventCallback` will
+still correctly pause/resume around any HOME-menu entry or app-swap either
+way.
+
+**Hardware verification still needed:**
+1. Start the hunt, open the HOME menu (or switch to another app, e.g.
+   `ftpd`), wait a few seconds, then return to Alpha Sapphire.
+2. Check the on-screen status line shows `Paused (sleep/HOME/swap in
+   progress)` while away, and resumes normal `Attempt N: ...` status on
+   return, with **no crash**.
+3. With Sleep Mode left on (default) and the hunt running, close the lid,
+   wait, then reopen it — same expectation: pause, then clean resume.
+
+### Crash investigation notes (for anyone debugging further)
+
+Three Luma3DS exception dumps from hardware (before attempt 2 above) were
+decoded with the [official parser](https://github.com/LumaTeam/luma3ds_exception_dump_parser)
+and cross-referenced against `shinyhunt.elf`'s symbol table
+(`arm-none-eabi-addr2line`/`nm`, unstripped build). All three: **data abort
+on write**, `PC` inside newlib's `_free_r` (+0x88), `LR` inside
+`__libc_lock_acquire_recursive` (+0x18) — i.e. heap corruption, detected
+while `free()` was walking/relinking the free list. Both `PC` and `LR`
+resolved to addresses inside the plugin's own mapped range (`0x07000100+`
+per `3gx.ld`), confirming the corruption is within the plugin's own
+statically-linked code/heap, not the game. The faulting instruction
+(`STR r5, [r1, #0xc]`) was writing through a register that had been loaded
+from a stale/garbage value resembling raw `.text` bytes rather than a valid
+heap pointer — consistent with a corrupted free-list node, though the
+original corrupting write was not identified (that would need a live
+debugger session or bisection, not just post-mortem register dumps).
+Pausing all memory/input access during transitions (attempt 2) removes the
+highest-risk window for this, but if crashes persist **outside** a
+sleep/HOME/swap transition after this fix, that would point to a second,
+separate cause and is worth new dumps + a fresh look.
 
 ---
 
@@ -133,3 +172,14 @@ in `ShinyHunter.cpp` already gates on `p.valid && p.species ==
 kTargetSpecies` before evaluating shininess), but it was misleading in the
 diagnostic. Fixed in `PokemonReader.cpp` by gating `out.shiny` on
 `out.valid`.
+
+**Note on the box slot after that fix:** `SHINY: no` is now correct, but the
+diagnostic may still print a non-zero `species`/`PID` for an empty box slot.
+That's expected, not a bug: an "empty" box slot on real hardware isn't
+necessarily zeroed memory — it can hold stale bytes from whatever was last
+stored/withdrawn there, with emptiness tracked by a separate flag elsewhere
+that this diagnostic doesn't read. `valid: no` (checksum fails) is the
+correct signal that the slot isn't a real, currently-held Pokémon; the raw
+species/PID printed alongside it are not meaningful in that case. This is
+only a cross-check display — the box address is never used by the actual
+hunt loop, only `kPartySlot1Addr` is.

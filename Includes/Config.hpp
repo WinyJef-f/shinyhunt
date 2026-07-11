@@ -111,20 +111,20 @@ namespace ShinyHunt
         static constexpr u32 kMaxAttempts       = 0;
 
         // --------------------------------------------------------------------
-        //  SLEEP CONTROL  (lid-close keep-awake)  -- <<CONFIRMED HARMFUL>>
+        //  SLEEP / HOME / SWAP  (lid-close, HOME menu, app-swap)
         // --------------------------------------------------------------------
-        // DEFAULT OFF. Hardware testing showed the blind, unsolicited
-        // ReplySleepQuery IPC (fired every ~2s on the game's own thread, even
-        // while Idle) desyncs APT's state machine: the screen goes black on
-        // lid-open and requires a hard reboot, and it also causes random
-        // crashes during boot/save-load (when the game itself is mid-APT-
-        // transaction). This is worse than doing nothing -- with this off the
-        // console just sleeps normally on lid-close (safe, but the hunt loop
-        // pauses until lid-open). See docs/OPEN_QUESTIONS.md Q1 for what a
-        // real fix requires (replying to the actual pending sleep-query
-        // notification instead of calling blind). Do not re-enable this
-        // without a rewritten, notification-driven SleepControl.
-        static constexpr bool kSleepControlEnabled = false;
+        // There is no "keep-awake" setting here. An earlier version tried to
+        // suppress sleep with a blind, unsolicited APT:U ReplySleepQuery IPC
+        // call every frame -- confirmed harmful on hardware (black screen on
+        // lid-open requiring a hard reboot, random crashes during boot/save-
+        // load, since it raced the framework's own transition handling).
+        //
+        // CTRPluginFramework already owns sleep/HOME/swap handling correctly,
+        // on its own thread, via Luma's plgldr event protocol, and exposes it
+        // through Process::SetProcessEventCallback(). Hunter::OnProcessEvent
+        // (registered in main.cpp) uses that to pause the FSM for the
+        // duration of the transition and resume exactly where it left off --
+        // no fighting the OS, no unsafe IPC. See docs/OPEN_QUESTIONS.md Q1.
 
         // --------------------------------------------------------------------
         //  LED (solid yellow on shiny)

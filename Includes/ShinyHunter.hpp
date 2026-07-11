@@ -9,6 +9,7 @@
 #pragma once
 
 #include <string>
+#include <CTRPluginFramework/System/Process.hpp>
 
 namespace ShinyHunt
 {
@@ -17,6 +18,14 @@ namespace ShinyHunt
         // Called once per frame by the framework. Safe to call before Start()
         // (it no-ops in the Idle state).
         void OnFrame(void);
+
+        // Registered via Process::SetProcessEventCallback (see main.cpp).
+        // Pauses the FSM for SLEEP/HOME/SWAP _ENTER (no input injection or
+        // memory reads while the game's own state/memory layout is mid-
+        // transition) and resumes it on the matching _EXIT, exactly where it
+        // left off. This is the framework-supported replacement for the
+        // removed SleepControl hack -- see docs/OPEN_QUESTIONS.md Q1.
+        void OnProcessEvent(CTRPluginFramework::Process::Event event);
 
         void Start(void);      // begin / restart the autonomous hunt
         void Stop(void);       // halt the loop (go Idle)

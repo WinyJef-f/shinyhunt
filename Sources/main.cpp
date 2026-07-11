@@ -70,6 +70,11 @@ namespace CTRPluginFramework
         // Sync the menu/callback with the game's frame event.
         menu->SynchronizeWithFrame(true);
 
+        // Pause the FSM during sleep/HOME/swap transitions instead of trying
+        // to prevent them (see docs/OPEN_QUESTIONS.md Q1 and
+        // ShinyHunter.cpp's Hunter::OnProcessEvent).
+        Process::SetProcessEventCallback(ShinyHunt::Hunter::OnProcessEvent);
+
         InitMenu(*menu);
 
         if (ShinyHunt::Cfg::kStartHuntOnBoot)
