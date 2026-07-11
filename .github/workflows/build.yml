@@ -23,8 +23,20 @@ jobs:
           if ! grep -Fxq "[thepixellizeross-linux]" "$CONF"; then
             printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$CONF"
           fi
-          dkp-pacman -Sy
-          dkp-pacman -S --noconfirm libctrpf
+
+          # pkg.devkitpro.org intermittently returns transient 403s under load;
+          # retry with backoff instead of failing the whole build on a hiccup.
+          for attempt in 1 2 3 4 5; do
+            if dkp-pacman -Sy && dkp-pacman -S --noconfirm libctrpf; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::dkp-pacman failed after 5 attempts"
+              exit 1
+            fi
+            echo "dkp-pacman attempt $attempt failed, retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
 
       # 3gxtool isn't a pacman package; it's built from source once and cached,
       # since the CMake + yaml-cpp build is the slow part of this workflow.
