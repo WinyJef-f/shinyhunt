@@ -9,6 +9,9 @@
 #pragma once
 
 #include <string>
+#include "types.h" // must precede Process.hpp: it uses the NORETURN macro
+                    // without defining it itself (same gap as Color.hpp)
+#include <CTRPluginFramework/System/Process.hpp>
 
 namespace ShinyHunt
 {
@@ -17,6 +20,12 @@ namespace ShinyHunt
         // Called once per frame by the framework. Safe to call before Start()
         // (it no-ops in the Idle state).
         void OnFrame(void);
+
+        // Registered via Process::SetProcessEventCallback (see main.cpp).
+        // Stops the hunt the instant the console enters sleep, the HOME menu,
+        // or an app swap -- doing anything during those transitions reliably
+        // crashed on hardware. See docs/OPEN_QUESTIONS.md Q1.
+        void OnProcessEvent(CTRPluginFramework::Process::Event event);
 
         void Start(void);      // begin / restart the autonomous hunt
         void Stop(void);       // halt the loop (go Idle)
@@ -28,9 +37,9 @@ namespace ShinyHunt
         // ---- Diagnostics (bound to on-screen menu entries) ------------------
         namespace Diag
         {
-            // Read party slot 1 AND box slot 1 right now, decrypt, and show
-            // PID/TID/SID/species/shiny + checksum validity. Use this to answer
-            // open-question #3 (do the offsets hold for this cartridge?).
+            // Read party slot 1 right now, decrypt, and show PID/TID/SID/
+            // species/shiny + checksum validity. Use this to answer open-
+            // question #3 (do the offsets hold for this cartridge?).
             void ReadPokemon(void);
 
             // Force the solid yellow LED and report the ptm:sysm Result +

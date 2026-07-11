@@ -1,15 +1,15 @@
 // ============================================================================
 //  Sound.hpp  -  Play the shiny jingle from the SD card.
 //
-//  CTRPF ships an SD-card sound player (System/Sound.hpp, backed by CSND +
-//  libcwav) in recent ThePixellizerOSS / PabloMK7 builds. The EXACT class/
-//  method names vary between libctrpf versions and could not be pinned from
-//  docs, so the real call is isolated in Sound.cpp behind SHINYHUNT_ENABLE_SOUND
-//  and defaults OFF, guaranteeing the plugin always builds.
+//  Thin wrapper over CTRPluginFramework's Sound class (backed by CSND +
+//  libcwav). The clip is a PCM16 mono BCWAV loaded from a fixed SD path
+//  (Cfg::kSoundPath); see assets/make_jingle.py for how it is generated and
+//  docs/AUDIO.md for how to replace it.
 //
-//  The notification LED is the primary, always-working shiny indicator. Sound
-//  is a bonus: enable it after confirming your libctrpf's Sound API and the
-//  audio format it expects (docs/AUDIO.md).
+//  Sound is ENABLED by default now that the real API is wired up. If the
+//  BCWAV file is missing at that path, loading simply fails and PlayJingle()
+//  is a no-op -- the plugin never crashes over a missing jingle. The
+//  notification LED remains the primary shiny indicator; sound is a bonus.
 // ============================================================================
 #pragma once
 
@@ -17,15 +17,16 @@ namespace ShinyHunt
 {
     namespace Sound
     {
-        // Load the jingle once (no-op if sound is disabled at compile time).
-        // Returns true if a real, playable sound was loaded.
+        // Load the jingle once from Cfg::kSoundPath. Returns true if a real,
+        // playable clip loaded (CWAV load status == SUCCESS). Safe to call
+        // repeatedly; only the first call does the work.
         bool Init(void);
 
-        // Fire-and-forget one play of the jingle. Returns true if it actually
-        // started playback (false when sound is disabled / failed to load).
+        // Fire-and-forget one play of the jingle. Returns true if playback
+        // actually started (false if the clip never loaded).
         bool PlayJingle(void);
 
-        // Whether real sound support is compiled in AND a clip loaded.
+        // Whether a real, playable clip is currently loaded.
         bool Available(void);
     }
 }

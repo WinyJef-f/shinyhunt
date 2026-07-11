@@ -109,7 +109,10 @@ namespace ShinyHunt
         out.valid = checksumOk && speciesOk;
 
         out.shinyValue = ComputeShinyValue(out.tid, out.sid, out.pid);
-        out.shiny      = (out.shinyValue < Cfg::kShinyThreshold);
+        // Gate on valid: an empty/garbage slot (species 0, PID 0) computes
+        // shinyValue == 0, which is < threshold. Without this guard it would
+        // display/report "shiny" for a slot that holds no real Pokemon.
+        out.shiny      = out.valid && (out.shinyValue < Cfg::kShinyThreshold);
 
         return out.valid;
     }

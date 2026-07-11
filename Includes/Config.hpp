@@ -21,16 +21,12 @@ namespace ShinyHunt
         // --------------------------------------------------------------------
         //  MODE
         // --------------------------------------------------------------------
-        // Set to true to boot into the on-screen DIAGNOSTIC menu instead of the
-        // autonomous hunt. Use this FIRST on hardware to resolve the three open
-        // questions (LED access, sleep, party-offset correctness) before you
-        // trust the loop overnight. See docs/OPEN_QUESTIONS.md.
-        //
-        // NOTE: even when this is false, the plugin still registers the
-        // diagnostic menu entries so you can open the Rosalina plugin menu and
-        // check status; this flag only decides whether the auto-loop starts
-        // running by itself on boot.
-        static constexpr bool kStartHuntOnBoot = true;
+        // The hunt never starts itself. It's off by default whenever the game
+        // boots/reboots -- start it explicitly from the L+R menu once you're
+        // actually ready to hunt, e.g. standing in front of the starter bag.
+        // This also means a crash recovery / game restart never silently
+        // resumes an unattended loop you didn't intend to leave running.
+        static constexpr bool kStartHuntOnBoot = false;
 
         // --------------------------------------------------------------------
         //  TARGET POKEMON
@@ -61,15 +57,12 @@ namespace ShinyHunt
         // --------------------------------------------------------------------
         // Address of PARTY slot 1's encrypted PK6 block for Alpha Sapphire.
         // Source: PKMN-NTR "sango" (ORAS) partyOff. Cross-checked against the
-        // ORAS box base 0x8C9E134 used by Gen6CTRPluginFramework / Project
-        // Pokemon RAM research.                                    <<VERIFIED>>
+        // ORAS box base used by Gen6CTRPluginFramework / Project Pokemon RAM
+        // research.                                                <<VERIFIED>>
+        // Confirmed correct on hardware (open-question #3): read a real
+        // Mudkip, TID/SID matched the trainer card, checksum valid.
         //   Party slot N (0-based) = kPartySlot1Addr + N * kPartyEntryStride.
-        //
-        // If your specific cartridge revision reads garbage here, use the
-        // DIAGNOSTIC menu to confirm/correct this before an overnight run
-        // (open-question #3).                                     <<CALIBRATE>>
         static constexpr u32 kPartySlot1Addr    = 0x8CFB26C; // ORAS party slot 1
-        static constexpr u32 kBoxSlot1Addr      = 0x8C9E134; // ORAS box 1 slot 1 (cross-check)
         static constexpr u32 kPartyEntryStride  = 0x104;     // 260 bytes per party entry
 
         // Size of the encrypted stored block we copy + decrypt (PK6 = 232).
@@ -111,6 +104,19 @@ namespace ShinyHunt
         static constexpr u32 kMaxAttempts       = 0;
 
         // --------------------------------------------------------------------
+        //  SLEEP / HOME / SWAP  (lid-close, HOME menu, app-swap)
+        // --------------------------------------------------------------------
+        // There is no "keep-awake" setting here, and there is no way to add
+        // one: sleep-on-lid-close is a hardware Hall sensor, not a software
+        // toggle. An earlier version tried to suppress it with a blind APT:U
+        // ReplySleepQuery IPC call -- confirmed harmful on hardware (black
+        // screen requiring a hard reboot). Instead, Hunter::OnProcessEvent
+        // (registered in main.cpp via Process::SetProcessEventCallback) simply
+        // STOPS the hunt the instant sleep / HOME / app-swap begins, so the
+        // FSM is inert through the transition. Restart from the menu after.
+        // Run with the lid OPEN. See docs/OPEN_QUESTIONS.md Q1.
+
+        // --------------------------------------------------------------------
         //  LED (solid yellow on shiny)
         // --------------------------------------------------------------------
         // Yellow = red + green, no blue.
@@ -125,10 +131,18 @@ namespace ShinyHunt
         static constexpr u32 kJinglePlays       = 5;
         static constexpr u32 kJingleGapFrames   = 60; // 1 second between plays
 
-        // SD path the plugin loads the jingle from at runtime. Deploy the
-        // converted audio file here (next to the .3gx). The <TITLEID> segment
-        // is filled in by the loader's install folder, so this is an absolute
-        // SD path you copy the asset to.                         <<CALIBRATE>>
+        // How many overlapping plays the clip allocates channels for. Our
+        // jingle is ~0.5 s and plays are 1 s apart, so they never overlap, but
+        // a small margin is harmless.
+        static constexpr int kJingleMaxSimultPlays = 4;
+
+        // Absolute SD path the plugin loads the jingle from at runtime.
+        // Copy assets/shiny_jingle.bcwav (built by assets/make_jingle.py and
+        // shipped in the CI artifact) to exactly this location:
+        //   sd:/luma/plugins/shiny_jingle.bcwav
+        // It is a single fixed path -- no per-title folder needed. If the file
+        // is missing the plugin simply runs without sound (the LED is the
+        // primary indicator); it never crashes over a missing jingle.
         static constexpr const char *kSoundPath =
             "/luma/plugins/shiny_jingle.bcwav";
     }

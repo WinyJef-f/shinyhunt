@@ -1,0 +1,97 @@
+name: Build plugin
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:20260610
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add ThePixellizerOSS pacman repo and install libctrpf
+        run: |
+          CONF=/opt/devkitpro/pacman/etc/pacman.conf
+          if ! grep -Fxq "[thepixellizeross-lib]" "$CONF"; then
+            printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$CONF"
+          fi
+          if ! grep -Fxq "[thepixellizeross-linux]" "$CONF"; then
+            printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$CONF"
+          fi
+          # Allow the direct-install fallback below to accept the downloaded
+          # (possibly unsigned) local package.
+          if ! grep -q '^LocalFileSigLevel' "$CONF"; then
+            sed -i '/^\[options\]/a LocalFileSigLevel = Optional' "$CONF"
+          fi
+
+          # Fast path: refresh DBs and install from the repo. pkg.devkitpro.org
+          # intermittently 403s its dkp-libs / dkp-linux databases, so retry a
+          # few times before falling back.
+          ok=0
+          for attempt in 1 2 3; do
+            if dkp-pacman -Sy && dkp-pacman -S --noconfirm libctrpf; then ok=1; break; fi
+            echo "dkp-pacman sync attempt $attempt failed; retrying in $((attempt * 15))s..."
+            sleep $((attempt * 15))
+          done
+
+          # Fallback: libctrpf lives on thepixellizeross (a static GitLab Pages
+          # site, independent of the flaky pkg.devkitpro.org), and its only
+          # dependencies (libctru, devkitARM) are already baked into the
+          # container image -- successful runs only ever downloaded the single
+          # libctrpf package. So install it directly, with NO devkitPro DB sync.
+          if [ "$ok" -ne 1 ]; then
+            echo "devkitPro DBs unreachable; installing libctrpf directly from thepixellizeross..."
+            base="https://thepixellizeross.gitlab.io/packages/any"
+            curl -fsSL "$base/thepixellizeross-lib.db" -o /tmp/tpo.db
+            mkdir -p /tmp/tpo_db && tar xzf /tmp/tpo.db -C /tmp/tpo_db
+            fn=$(grep -A1 '%FILENAME%' /tmp/tpo_db/libctrpf-*/desc | tail -1)
+            echo "Downloading $fn"
+            curl -fsSL "$base/$fn" -o "/tmp/$fn"
+            dkp-pacman -U --noconfirm "/tmp/$fn"
+          fi
+
+      # 3gxtool isn't a pacman package; it's built from source once and cached,
+      # since the CMake + yaml-cpp build is the slow part of this workflow.
+      - name: Cache 3gxtool
+        id: cache-3gxtool
+        uses: actions/cache@v4
+        with:
+          path: /opt/devkitpro/tools/bin/3gxtool
+          key: 3gxtool-linux-v1
+
+      - name: Build 3gxtool
+        if: steps.cache-3gxtool.outputs.cache-hit != 'true'
+        run: |
+          apt-get update && apt-get install -y cmake
+          git clone --recursive https://gitlab.com/thepixellizeross/3gxtool.git /tmp/3gxtool
+          cd /tmp/3gxtool
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          BIN=$(find build -type f -name '3gxtool*' -perm -u+x | head -n1)
+          mkdir -p /opt/devkitpro/tools/bin
+          cp "$BIN" /opt/devkitpro/tools/bin/3gxtool
+          chmod +x /opt/devkitpro/tools/bin/3gxtool
+
+      - name: Verify 3gxtool
+        run: /opt/devkitpro/tools/bin/3gxtool --help
+
+      - name: Build plugin
+        env:
+          DEVKITARM: /opt/devkitpro/devkitARM
+        run: make
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinyhunt-3gx
+          path: |
+            shinyhunt.3gx
+            shinyhunt.elf
+            assets/shiny_jingle.bcwav
+          if-no-files-found: error
+          retention-days: 14

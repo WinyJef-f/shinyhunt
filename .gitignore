@@ -5,9 +5,10 @@ Build/
 *.o
 *.d
 
-# Converted audio (source stays in assets/)
-shiny_jingle.bcwav
-shiny_jingle.wav
+# The shiny jingle (assets/shiny_jingle.bcwav) IS committed -- it is generated
+# deterministically by assets/make_jingle.py and shipped to users in the CI
+# artifact, so it is a tracked deliverable, not build junk.
+*.wav
 
 # macOS
 .DS_Store

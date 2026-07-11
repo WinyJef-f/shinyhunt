@@ -7,7 +7,6 @@
 #include "InputSim.hpp"
 #include "Led.hpp"
 #include "Sound.hpp"
-#include "SleepControl.hpp"
 
 #include <CTRPluginFramework.hpp>
 #include <3ds.h>
@@ -90,9 +89,11 @@ namespace ShinyHunt
                 EnterShinyHold();
                 return;
             }
-            // Not shiny: notify occasionally and reset.
-            if ((s_attempts % 10) == 0)
-                OSD::Notify("Attempt " + std::to_string(s_attempts) + ": not shiny");
+            // Not shiny: reset. No OSD::Notify here on purpose -- it allocates
+            // a std::string on the shared framework heap from inside the
+            // per-frame loop, which is exactly the kind of activity implicated
+            // in the heap-corruption crashes (see docs/OPEN_QUESTIONS.md Q1).
+            // The live attempt count is still visible via the menu status line.
             Enter(State::SoftReset);
         }
     }
@@ -100,9 +101,6 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::OnFrame(void)
     {
-        // Keep the system awake whenever the plugin is loaded and active.
-        SleepControl::Reassert();
-
         switch (s_state)
         {
         case State::Idle:
@@ -181,14 +179,13 @@ namespace ShinyHunt
                 // Timed out: either a script desync or the wrong starter got
                 // picked. Treat as a failed attempt and reset -- this can never
                 // "accept" a wrong-species Pokemon, so a desync only wastes a
-                // cycle, it does not corrupt the hunt.
+                // cycle, it does not corrupt the hunt. (No OSD::Notify here --
+                // no heap allocation from the per-frame loop; see Evaluate.)
                 if (Cfg::kMaxAttempts != 0 && s_attempts >= Cfg::kMaxAttempts)
                 {
-                    OSD::Notify("Reached max attempts; stopping");
                     Enter(State::Idle);
                     break;
                 }
-                OSD::Notify("Party wait timed out; resetting");
                 Enter(State::SoftReset);
             }
             break;
@@ -222,9 +219,34 @@ namespace ShinyHunt
     {
         s_attempts = 0;
         Sound::Init(); // load the clip once (no-op if sound disabled)
-        SleepControl::KeepAwake();
         Enter(State::SoftReset);
         OSD::Notify("Shiny hunt started");
+    }
+
+    void Hunter::OnProcessEvent(Process::Event event)
+    {
+        // The console entering sleep (lid close), the HOME menu, or an app
+        // swap while the hunt is active reliably crashed on hardware (heap
+        // corruption during the framework's own transition handling). The
+        // console cannot be kept out of sleep anyway -- it's a hardware lid
+        // sensor, not a software setting. So the safe thing is to fully STOP
+        // the hunt the instant any of these begins, leaving the FSM Idle and
+        // completely inert (no input injection, no memory reads) through the
+        // transition. Restart the hunt manually from the menu afterwards.
+        //
+        // This handler runs on the framework's own thread mid-transition, so
+        // it must not allocate or touch the OSD -- set the state directly,
+        // nothing else.
+        switch (event)
+        {
+        case Process::Event::SLEEP_ENTER:
+        case Process::Event::HOME_ENTER:
+        case Process::Event::SWAP_ENTER:
+            s_state = State::Idle;
+            break;
+        default:
+            break;
+        }
     }
 
     void Hunter::Stop(void)
@@ -240,6 +262,7 @@ namespace ShinyHunt
 
     std::string Hunter::StatusLine(void)
     {
+
         switch (s_state)
         {
         case State::Idle:          return "Idle";
@@ -257,15 +280,12 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::Diag::ReadPokemon(void)
     {
-        PkmData party, box;
+        PkmData party;
         PokemonReader::Read(Cfg::kPartySlot1Addr, party);
-        PokemonReader::Read(Cfg::kBoxSlot1Addr, box);
 
         std::string body;
         body += "=== PARTY slot 1 (" + Hex32(Cfg::kPartySlot1Addr) + ") ===\n";
-        body += Describe(party) + "\n\n";
-        body += "=== BOX 1 slot 1 (" + Hex32(Cfg::kBoxSlot1Addr) + ") ===\n";
-        body += Describe(box);
+        body += Describe(party);
 
         MessageBox("Shiny Hunter - memory check", body)();
     }
@@ -284,13 +304,23 @@ namespace ShinyHunt
 
     void Hunter::Diag::TestSound(void)
     {
-        Sound::Init();
+        bool loaded = Sound::Init();
         bool played = Sound::PlayJingle();
         std::string body;
-        body += std::string("sound compiled in + loaded: ") + (Sound::Available() ? "YES" : "NO") + "\n";
-        body += std::string("play started: ") + (played ? "YES" : "NO") + "\n";
-        if (!Sound::Available())
-            body += "Enable SHINYHUNT_ENABLE_SOUND and set the clip path/format (docs/AUDIO.md).";
+        body += std::string("jingle loaded: ") + (loaded ? "YES" : "NO") + "\n";
+        body += std::string("play started: ") + (played ? "YES" : "NO") + "\n\n";
+        body += "checked (either works):\n";
+        body += " 1) " + std::string(Cfg::kSoundPath) + "\n";
+        body += " 2) shiny_jingle.bcwav (next to the .3gx)\n\n";
+        if (!loaded)
+            body += "Not found. Copy shiny_jingle.bcwav (from the build) to\n"
+                    "sd:/luma/plugins/shiny_jingle.bcwav (docs/AUDIO.md).\n"
+                    "Sound is optional -- the LED is the primary indicator.";
+        else if (!played)
+            body += "Loaded but play did not start (channel busy?). Try again.";
+        else
+            body += "You should have heard the jingle. If it was silent,\n"
+                    "set Rosalina's forced volume to max and save.";
         MessageBox("Shiny Hunter - sound test", body)();
     }
 }
