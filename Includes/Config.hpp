@@ -111,6 +111,22 @@ namespace ShinyHunt
         static constexpr u32 kMaxAttempts       = 0;
 
         // --------------------------------------------------------------------
+        //  SLEEP CONTROL  (lid-close keep-awake)  -- <<CONFIRMED HARMFUL>>
+        // --------------------------------------------------------------------
+        // DEFAULT OFF. Hardware testing showed the blind, unsolicited
+        // ReplySleepQuery IPC (fired every ~2s on the game's own thread, even
+        // while Idle) desyncs APT's state machine: the screen goes black on
+        // lid-open and requires a hard reboot, and it also causes random
+        // crashes during boot/save-load (when the game itself is mid-APT-
+        // transaction). This is worse than doing nothing -- with this off the
+        // console just sleeps normally on lid-close (safe, but the hunt loop
+        // pauses until lid-open). See docs/OPEN_QUESTIONS.md Q1 for what a
+        // real fix requires (replying to the actual pending sleep-query
+        // notification instead of calling blind). Do not re-enable this
+        // without a rewritten, notification-driven SleepControl.
+        static constexpr bool kSleepControlEnabled = false;
+
+        // --------------------------------------------------------------------
         //  LED (solid yellow on shiny)
         // --------------------------------------------------------------------
         // Yellow = red + green, no blue.

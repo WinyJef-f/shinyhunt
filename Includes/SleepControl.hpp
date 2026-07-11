@@ -1,14 +1,13 @@
 // ============================================================================
 //  SleepControl.hpp  -  Keep the console awake with the lid closed.
 //
-//  OPEN QUESTION #1: normal retail titles sleep on lid-close. Luma only
-//  suppresses that automatically while InputRedirection / the debugger is
-//  active, neither of which we use. libctru's aptSetSleepAllowed(false) tells
-//  APT to refuse sleep (this is how music players keep running lid-closed).
-//
-//  The game may re-enable sleep every frame, so Reassert() is meant to be
-//  called from the per-frame loop. Confirm on hardware that this actually
-//  holds through a lid-close (docs/OPEN_QUESTIONS.md).
+//  CONFIRMED HARMFUL ON HARDWARE, DISABLED BY DEFAULT (Cfg::kSleepControlEnabled).
+//  Calling ReplySleepQuery unsolicited (not in response to an actual pending
+//  sleep-query notification), on the game's own thread, desyncs APT's state
+//  machine: the screen goes black on lid-open and requires a hard reboot, and
+//  it also causes random crashes during boot/save-load. See
+//  docs/OPEN_QUESTIONS.md Q1 for what a real fix requires. Do not call these
+//  functions (or flip the config flag) without a notification-driven rewrite.
 // ============================================================================
 #pragma once
 

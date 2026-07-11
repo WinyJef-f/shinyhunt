@@ -100,8 +100,11 @@ namespace ShinyHunt
     // ------------------------------------------------------------------------
     void Hunter::OnFrame(void)
     {
-        // Keep the system awake whenever the plugin is loaded and active.
-        SleepControl::Reassert();
+        // See Cfg::kSleepControlEnabled -- confirmed harmful on hardware
+        // (black screen on lid-open requiring a hard reboot, random crashes
+        // during boot/save-load). Off by default.
+        if (Cfg::kSleepControlEnabled)
+            SleepControl::Reassert();
 
         switch (s_state)
         {
@@ -222,7 +225,8 @@ namespace ShinyHunt
     {
         s_attempts = 0;
         Sound::Init(); // load the clip once (no-op if sound disabled)
-        SleepControl::KeepAwake();
+        if (Cfg::kSleepControlEnabled)
+            SleepControl::KeepAwake();
         Enter(State::SoftReset);
         OSD::Notify("Shiny hunt started");
     }

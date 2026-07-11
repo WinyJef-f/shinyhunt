@@ -12,6 +12,9 @@ you are testing so the loop does not start on its own.
 
 ## Q1 — Does the console stay awake with the lid closed?
 
+**RESOLVED (negatively) on hardware — `SleepControl` is now disabled by
+default (`Cfg::kSleepControlEnabled = false`). Do not re-enable it as-is.**
+
 Retail titles sleep on lid-close. Luma only auto-suppresses that while
 InputRedirection / the debugger is active, and we use neither.
 
@@ -24,37 +27,48 @@ path; its statically-linked libctru is a "shadow" copy that was never
 bootstrapped. Confirmed by a real link error:
 `undefined reference to '__apt_appid'`.
 
-`SleepControl.cpp` now reimplements the same underlying `APT:U` service calls
-directly — the same pattern `Led.cpp` already uses (own `srvGetServiceHandle`,
-own IPC command buffer, no dependency on libctru's internal/uninitialized
-statics): it queries the **live, currently-active app ID** via
-`GetAppletManInfo` (rather than the stale/unset global), then calls
-`ReplySleepQuery` with `APTREPLY_REJECT`, periodically.
+`SleepControl.cpp` reimplemented the same underlying `APT:U` service calls
+directly — same pattern as `Led.cpp` (own `srvGetServiceHandle`, own IPC
+command buffer): it queries the **live, currently-active app ID** via
+`GetAppletManInfo`, then calls `ReplySleepQuery` with `APTREPLY_REJECT`,
+periodically (every ~2s, unconditionally, from the per-frame callback — even
+while `Idle`).
 
-**This still does not answer Q1.** `ReplySleepQuery` is normally sent *in
-response to* an actual pending sleep-query notification; whether an
-unsolicited call here has any effect — versus only mattering at the instant
-the lid closes and a query is actually pending — is unverified. That is
-exactly what the hardware test below must determine. If it turns out
-ineffective, the next thing to try is detecting the actual `APTSIGNAL_SLEEP`
-event (via `aptGetStatus`/`aptHook`-equivalent raw IPC) and replying to it
-specifically, rather than calling `ReplySleepQuery` blind.
+**Hardware result: this is actively harmful, not just ineffective.**
+On real hardware this produced two reproducible failures:
+1. The console did not sleep on lid-close (the reject "worked"), but on
+   **lid-open the screen stayed black**, with no recovery except a **hard
+   reboot**.
+2. **Random crashes during boot / save-load** — i.e. exactly the moments the
+   game itself is mid-sequence on its own legitimate `APT:U` IPC calls.
 
-**Test:**
-1. Start the hunt (or just leave the plugin loaded — keep-awake is asserted
-   whenever the FSM runs; for a pure sleep test, start the hunt).
-2. Close the lid for ~60 seconds, then open it.
-3. Watch the on-screen attempt counter / OSD notifications.
+Root cause: `ReplySleepQuery` is meant to be sent *in response to* an actual
+pending sleep-query notification the app receives through the normal
+`APT:U` protocol sequence (`GetLock` → `ReceiveParameter` → ... → reply).
+Firing it **unsolicited**, on the same thread the host game uses for its own
+APT session, desyncs that state machine — either by corrupting the wake
+handshake (black screen after lid-open) or by colliding with the game's own
+in-flight APT transaction during a boot/scene transition (random crash). A
+hard-reboot failure mode is unacceptable for an unattended run, so this is
+now **off by default**. Leaving it off means the console sleeps normally on
+lid-close (safe) and the hunt simply **pauses until the lid is reopened** —
+not full "hands-off with the lid closed," but no more hangs/crashes.
 
-- **Pass:** the attempt count advanced while the lid was shut → nothing else to do.
-- **Fail (it slept):** the count is frozen and the game resumes only on lid-open.
-  Then: confirm `SleepControl::KeepAwake()` runs (it is called from
-  `Hunter::Start`). If it still sleeps, the game is overriding APT harder than
-  expected; the fallback is to also block the shell-close notification — see the
-  note at the bottom of `SleepControl.cpp` and open an issue with what you see.
+**A real fix (not yet implemented)** would need to be notification-driven
+instead of blind: register for the actual `APTSIGNAL_SLEEP` event (the
+equivalent of libctru's internal `aptHook`/`ReceiveParameter` handling, done
+manually via raw IPC the same way `GetActiveAppId` is), and only call
+`ReplySleepQuery` in direct response to that specific pending query — never
+speculatively. This is a nontrivial rewrite; do not flip
+`Cfg::kSleepControlEnabled` back on without it.
 
-> Even when awake, the **backlight turns off** with the lid closed — that is
-> normal and fine. The game logic and our injected inputs keep running.
+**If you want to experiment further anyway:** set `Cfg::kSleepControlEnabled
+= true`, rebuild, and expect the two failures above. Useful only for
+debugging a proper notification-driven replacement.
+
+> The **backlight turns off** with the lid closed even when asleep — that is
+> normal. With `kSleepControlEnabled = false`, the game (and our FSM) simply
+> pause during sleep and resume correctly on lid-open.
 
 ---
 
@@ -105,3 +119,17 @@ against multiple sources, but verify before trusting it overnight.
 
 > Do this with a **known non-shiny** Pokémon so a `SHINY: no` result proves the
 > math is right, not just that it read *something*.
+
+**RESOLVED on hardware:** party slot 1 read species 258 (Mudkip), matching
+TID/SID against the trainer card, `valid: YES`, `SHINY: no`. The offset is
+correct for this cartridge.
+
+**Bug found and fixed:** the box 1 slot 1 cross-check showed `valid: no` (as
+expected — box was empty) but also `SHINY: *** YES ***`, which is wrong. An
+empty slot decrypts to species 0 / PID 0, and `shinyValue = 0 ^ 0 ^ 0 ^ 0 =
+0`, which is `< 16` — so the shiny flag was computed even though the slot
+holds no real Pokémon. This never affected the actual hunt loop (`WaitParty`
+in `ShinyHunter.cpp` already gates on `p.valid && p.species ==
+kTargetSpecies` before evaluating shininess), but it was misleading in the
+diagnostic. Fixed in `PokemonReader.cpp` by gating `out.shiny` on
+`out.valid`.

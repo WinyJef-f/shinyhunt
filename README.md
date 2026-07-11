@@ -14,19 +14,18 @@ and deploy.
 
 ## Status — read this first
 
-This plugin was written against the documented APIs of CTRPluginFramework,
-Gen6CTRPluginFramework, PKMN-NTR and ctr-led-brary. **It has not been run on
-hardware from here** (that requires your console). The design deliberately
-front-loads the three open questions from the brief and isolates every
-hardware-dependent value so you can close them quickly.
+This plugin has now been run on hardware (New 3DS, ORAS). Party read/decrypt
+and the LED are confirmed working. **Lid-close keep-awake is confirmed
+harmful and is disabled by default** — see the table below and
+`docs/OPEN_QUESTIONS.md` Q1.
 
 | Area | Confidence | Notes |
 |------|-----------|-------|
-| Gen 6 PK6 read + decrypt + shiny math | **High** — cross-checked vs PKHeX/Gen6CTRPF | `PokemonReader.cpp` |
-| ORAS party slot-1 address `0x8CFB26C` | **High** — from PKMN-NTR + Project Pokémon RAM research | verify on your cart (Q3) |
+| Gen 6 PK6 read + decrypt + shiny math | **Confirmed on hardware** | `PokemonReader.cpp`; party slot 1 read a real Mudkip, checksum valid |
+| ORAS party slot-1 address `0x8CFB26C` | **Confirmed on hardware** (Q3) | matched species + trainer TID/SID |
 | Input injection model (`InjectKey`, per-frame) | **High** — from CTRPF `Controller.cpp` | timing needs tuning |
-| LED via `ptm:sysm` | **Medium** — call is correct; **in-process access is Q2** | has diagnostic + fallback |
-| Keep-awake with lid closed | **Medium** — `aptSetSleepAllowed(false)`; **that is Q1** | verify with a lid test |
+| LED via `ptm:sysm` | **Confirmed on hardware** (Q2) | reachable, `SetInfoLedPattern` returned success, LED visually solid yellow |
+| Keep-awake with lid closed | **Confirmed harmful — disabled by default** (Q1) | caused black-screen hangs (hard reboot required) + random crashes; console now sleeps normally on lid-close, hunt pauses until lid-open — see `docs/OPEN_QUESTIONS.md` |
 | Starter input *timing/sequence* | **Needs calibration** | `InputSim.cpp` script |
 | Shiny jingle playback | **Off by default** | enable after confirming the Sound API — see `docs/AUDIO.md` |
 
@@ -51,7 +50,9 @@ The **LED is the primary, always-on indicator**; sound is a bonus.
    `docs/HARDWARE_CALIBRATION.md`
 6. **(Optional) enable sound** → `docs/AUDIO.md`
 7. Save **standing right in front of the starter bag**, start the hunt, close
-   the menu, close the lid.
+   the menu. Leave the lid **open** (or propped) for a true unattended run
+   until Q1 (lid-close keep-awake) has a working fix — closing the lid
+   currently just pauses the hunt safely until you reopen it.
 
 ---
 
@@ -71,8 +72,11 @@ Evaluate   -> shinyVal = TID ^ SID ^ (PID>>16) ^ (PID & 0xFFFF)
 ShinyHold  -> LED solid yellow (re-asserted), jingle x5, hold forever
 ```
 
-Because the inputs are **software-injected** (not physical buttons) and sleep is
-suppressed, the whole loop keeps running with the lid closed.
+Inputs are **software-injected** (not physical buttons), so the loop runs
+unattended without anyone touching the console. Lid-close keep-awake is
+currently **disabled by default** (see Status table above) — the console
+sleeps normally when the lid closes, and the loop resumes automatically on
+lid-open rather than running through a closed lid.
 
 ## Layout
 
@@ -83,7 +87,7 @@ Includes|Sources/PokemonReader.*         party read + Gen6 decrypt + shiny
 Includes|Sources/InputSim.*              InjectKey wrapper + starter input script
 Includes|Sources/Led.*                   ptm:sysm SetInfoLedPattern (solid yellow)
 Includes|Sources/Sound.*                 CTRPF Sound wrapper (guarded, off by default)
-Includes|Sources/SleepControl.*          aptSetSleepAllowed keep-awake
+Includes|Sources/SleepControl.*          raw APT:U keep-awake (disabled by default, see docs/OPEN_QUESTIONS.md)
 Includes|Sources/ShinyHunter.*           the FSM + on-screen diagnostics
 Sources/main.cpp                         plugin entry, menu, callback registration
 assets/emerald_0066.wav                  your shiny jingle (needs conversion, see AUDIO.md)
