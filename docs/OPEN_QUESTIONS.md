@@ -13,10 +13,32 @@ you are testing so the loop does not start on its own.
 ## Q1 — Does the console stay awake with the lid closed?
 
 Retail titles sleep on lid-close. Luma only auto-suppresses that while
-InputRedirection / the debugger is active, and we use neither. The plugin calls
-`aptSetSleepAllowed(false)` at start and **re-asserts it every frame**
-(`SleepControl::Reassert()` in the FSM), which is how music players stay alive
-lid-closed.
+InputRedirection / the debugger is active, and we use neither.
+
+**Finding from CI (not hardware, but relevant):** libctru's high-level
+`aptSetSleepAllowed()` cannot even be *linked* from a 3GX plugin — it calls
+`envGetAptAppId()`, which reads a symbol (`__apt_appid`) that's only populated
+by devkitARM's normal homebrew startup path (`crt0` → system init →
+`aptInit()`). A plugin injected into an already-running game never takes that
+path; its statically-linked libctru is a "shadow" copy that was never
+bootstrapped. Confirmed by a real link error:
+`undefined reference to '__apt_appid'`.
+
+`SleepControl.cpp` now reimplements the same underlying `APT:U` service calls
+directly — the same pattern `Led.cpp` already uses (own `srvGetServiceHandle`,
+own IPC command buffer, no dependency on libctru's internal/uninitialized
+statics): it queries the **live, currently-active app ID** via
+`GetAppletManInfo` (rather than the stale/unset global), then calls
+`ReplySleepQuery` with `APTREPLY_REJECT`, periodically.
+
+**This still does not answer Q1.** `ReplySleepQuery` is normally sent *in
+response to* an actual pending sleep-query notification; whether an
+unsolicited call here has any effect — versus only mattering at the instant
+the lid closes and a query is actually pending — is unverified. That is
+exactly what the hardware test below must determine. If it turns out
+ineffective, the next thing to try is detecting the actual `APTSIGNAL_SLEEP`
+event (via `aptGetStatus`/`aptHook`-equivalent raw IPC) and replying to it
+specifically, rather than calling `ReplySleepQuery` blind.
 
 **Test:**
 1. Start the hunt (or just leave the plugin loaded — keep-awake is asserted
