@@ -90,14 +90,8 @@ assets/emerald_0066.wav                  your shiny jingle (needs conversion, se
 docs/BUILD_MAC.md | BUILD_WINDOWS.md      native toolchain setup + build + deploy
 docs/OPEN_QUESTIONS.md                    the three hardware tests to run first
 docs/HARDWARE_CALIBRATION.md              offset verify + input-timing tuning
-docs/EMULATOR.md                          what a 3DS emulator can/can't do for this
 docs/AUDIO.md                             jingle format + conversion
 ```
-
-> **Can I develop this entirely in a 3DS emulator?** No — emulators don't run
-> Luma3DS's plugin loader, so the `.3gx` can't load there. An emulator is still
-> useful on the Mac for working out the input choreography and validating the
-> decryption against real game data; see `docs/EMULATOR.md`.
 
 ## Credits / references
 
